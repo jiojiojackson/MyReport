@@ -301,7 +301,10 @@ async function handleRequest(request, env) {
     const accounts = await listReports(env);
     if (isApi) return json({ success: true, data: accounts });
     const query = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
-    return html(renderPage(accounts, query, { deleted: url.searchParams.get("deleted") === "1" }));
+    return html(renderPage(accounts, query, {
+      deleted: url.searchParams.get("deleted") === "1",
+      manage: url.searchParams.get("manage") === "1",
+    }));
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError

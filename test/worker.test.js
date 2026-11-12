@@ -567,12 +567,12 @@ test("local HTTP development uses a host-only HttpOnly cookie", async () => {
   assert.ok(!cookie.includes("Domain="));
 });
 
-test("report rows include a delete entry while retaining all eleven report columns", async () => {
+test("management mode reveals delete entries while retaining all eleven report columns", async () => {
   await post();
-  const html = await (await read("/?q=alice")).text();
+  const html = await (await read("/?q=alice&manage=1")).text();
   assert.equal((html.match(/scope="col"/g) ?? []).length, 11);
   assert.ok(html.includes("删除全部记录"));
-  assert.ok(html.includes("/accounts/delete?email=alice%40example.com&amp;next=%2F%3Fq%3Dalice"));
+  assert.ok(html.includes("/accounts/delete?email=alice%40example.com&amp;next=%2F%3Fq%3Dalice%26manage%3D1"));
 });
 
 test("GET and HEAD deletion confirmation never change database records", async () => {

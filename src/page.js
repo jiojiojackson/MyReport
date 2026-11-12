@@ -23,6 +23,11 @@ const STYLES = `
   .refresh { display:inline-flex; align-items:center; justify-content:center; gap:9px; padding:11px 16px; border:1px solid #d6dfda; background:#fff; border-radius:7px; font-size:13px; white-space:nowrap; }
   .refresh:hover { background:#edf3ef; border-color:#a9bfb3; }
   .refresh svg { width:15px; height:15px; }
+  .heading-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .heading-actions .manage-form { width:auto; }
+  .manage-button { padding:11px 16px; background:#fff; border-color:#d6dfda; font-size:13px; white-space:nowrap; }
+  .manage-button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .manage-button[aria-pressed="true"]:hover { background:#205746; }
   .stats { display:flex; gap:0; margin:0 0 32px; padding:22px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .stat { padding:0 38px; border-right:1px solid var(--line); }
   .stat:first-child { padding-left:0; }
@@ -59,8 +64,34 @@ const STYLES = `
   .avatar { background:#f0f3ed; color:#718268; width:30px; height:30px; border:1px solid #e7ece3; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
   .email { max-width:240px; overflow:hidden; text-overflow:ellipsis; color:#35463d; font-weight:500; }
   .account-details { display:grid; gap:6px; min-width:0; }
-  .delete-link { justify-self:start; font-size:10px; color:#a15c50; }
+  .delete-link { display:inline-flex; align-items:center; justify-self:start; min-height:30px; padding:5px 8px; border:1px solid #eddad6; border-radius:5px; background:#fff7f5; font-size:11px; color:#a15c50; }
   .delete-link:hover { color:#843d33; text-decoration:underline; }
+  .mobile-reports, .mobile-hint { display:none; }
+  .account-card { min-width:0; padding:16px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .card-account { display:flex; align-items:center; gap:10px; min-width:0; }
+  .card-email { min-width:0; margin:0; font-size:13px; font-weight:600; line-height:1.6; overflow-wrap:anywhere; }
+  .card-latest, .history-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr); gap:12px; font-variant-numeric:tabular-nums; }
+  .card-latest { margin:18px 0 16px; }
+  .card-latest-wide, .history-row-wide { grid-template-columns:minmax(0,1fr); }
+  .card-latest div, .history-row div { min-width:0; }
+  .card-latest dt, .history-row dt { color:var(--muted); font-size:11px; line-height:1.6; margin:0 0 7px; }
+  .card-latest dd, .history-row dd { margin:0; overflow-wrap:anywhere; }
+  .card-points { color:var(--accent); font-size:22px; font-weight:650; line-height:1.3; }
+  .card-latest-wide .card-points { font-size:20px; }
+  .card-time { font-size:12px; line-height:1.8; }
+  .card-history { border-top:1px solid var(--line); }
+  .card-history summary { display:flex; align-items:center; gap:8px; min-height:44px; color:var(--accent); font-size:12px; cursor:pointer; list-style:none; -webkit-tap-highlight-color:rgba(39,103,86,.08); }
+  .card-history summary::-webkit-details-marker { display:none; }
+  .card-history summary::after { content:""; width:6px; height:6px; margin-left:auto; margin-right:3px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
+  .card-history[open] > summary::after { transform:rotate(225deg); }
+  .card-history summary:focus-visible { outline:3px solid #70a994; outline-offset:2px; }
+  .history-count { color:var(--muted); font-size:11px; }
+  .history-row { margin:0; padding:13px 0; border-top:1px solid #edf0ed; }
+  .history-row dd { font-size:13px; line-height:1.6; }
+  .history-row time { font-size:12px; }
+  .card-note { margin:0; padding-top:12px; border-top:1px solid var(--line); font-size:11px; color:var(--muted); }
+  .card-actions { padding-top:12px; border-top:1px solid var(--line); }
+  .card-actions .delete-link { min-height:40px; padding:8px 12px; }
   .notice { margin:0 0 24px; padding:13px 16px; border:1px solid #d5e5da; border-radius:7px; background:#edf5ef; color:var(--accent); line-height:1.8; }
   .empty { text-align:center; padding:75px 20px 82px; color:var(--muted); white-space:normal; }
   .empty .empty-icon { font-size:25px; color:#a2b5a8; margin-bottom:14px; }
@@ -95,11 +126,13 @@ const STYLES = `
     .top-note { font-size:10px; }
     .top-actions .top-note { display:none; }
     .login-card { margin-top:20px; padding:26px 22px; }
-    main { padding:30px 18px 20px; }
-    .heading { gap:12px; margin-bottom:26px; align-items:flex-start; }
+    main { padding:30px 14px 20px; }
+    .heading { flex-direction:column; gap:18px; margin-bottom:26px; align-items:stretch; }
+    .heading-actions { flex-wrap:wrap; }
+    .heading-actions .refresh, .manage-button { margin:0; min-height:42px; padding:10px 14px; }
     h1 { font-size:26px; }
     .description { font-size:12px; }
-    .refresh { padding:9px 11px; margin-top:30px; font-size:12px; }
+    .refresh { padding:9px 11px; font-size:12px; }
     .stats { flex-wrap:wrap; row-gap:24px; padding:20px 0; }
     .stat { padding:0 22px; }
     .stat dd { font-size:23px; }
@@ -109,8 +142,11 @@ const STYLES = `
     form { width:100%; }
     .search { flex:1; min-width:0; }
     input { width:100%; min-width:0; }
-    th:first-child { min-width:200px; }
-    .email { max-width:190px; }
+    .search input { font-size:16px; }
+    .toolbar button { min-height:40px; }
+    .desktop-reports, .desktop-hint { display:none; }
+    .mobile-reports { display:grid; gap:12px; padding:10px; background:var(--paper); border-top:1px solid var(--line); }
+    .mobile-hint { display:inline; }
     .table-footer, footer { flex-direction:column; gap:5px; }
     .table-footer { padding:13px 16px; }
   }
@@ -158,24 +194,65 @@ function reportCells(reports) {
   }).join("");
 }
 
-export function renderPage(accounts, query = "", { deleted = false } = {}) {
+function reportUrl(query, manage) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (manage) params.set("manage", "1");
+  return params.size ? `/?${params}` : "/";
+}
+
+function deleteLink(email, returnTo) {
+  return `<a class="delete-link" href="/accounts/delete?email=${encodeURIComponent(email)}&amp;next=${encodeURIComponent(returnTo)}" aria-label="删除 ${escapeHtml(email)} 的全部记录">删除全部记录</a>`;
+}
+
+function reportTime(value) {
+  return `<time datetime="${escapeHtml(String(value).replace(" ", "T"))}">${escapeHtml(value)}</time>`;
+}
+
+function mobileAccount(account, returnTo, manage) {
+  const [latest, ...history] = account.reports;
+  return `<article class="account-card" role="listitem">
+    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><h3 class="card-email">${escapeHtml(account.email)}</h3></header>
+    <dl class="card-latest${String(latest.total_points).length > 10 ? " card-latest-wide" : ""}" aria-label="最近报告">
+      <div><dt>最近总积分</dt><dd class="card-points">${escapeHtml(latest.total_points)}</dd></div>
+      <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
+    </dl>
+    ${history.length ? `<details class="card-history"><summary>历史记录<span class="history-count">${history.length} 份</span></summary>
+      ${history.map((report, index) => `<dl class="history-row${String(report.total_points).length > 10 ? " history-row-wide" : ""}" aria-label="历史报告${index + 2}">
+        <div><dt>历史总积分${index + 2}</dt><dd>${escapeHtml(report.total_points)}</dd></div>
+        <div><dt>历史报告时间${index + 2}</dt><dd>${reportTime(report.report_time)}</dd></div>
+      </dl>`).join("")}
+    </details>` : '<p class="card-note">暂无历史记录</p>'}
+    ${manage ? `<div class="card-actions">${deleteLink(account.email, returnTo)}</div>` : ""}
+  </article>`;
+}
+
+export function renderPage(accounts, query = "", { deleted = false, manage = false } = {}) {
   const filtered = accounts.filter((account) => account.email.includes(query.toLowerCase()));
   const retained = accounts.reduce((total, account) => total + account.reports.length, 0);
   const latest = accounts[0]?.reports[0]?.report_time ?? "暂无报告";
-  const refreshUrl = query ? `/?q=${encodeURIComponent(query)}` : "/";
+  const refreshUrl = reportUrl(query, manage);
+  const clearUrl = reportUrl("", manage);
   const headers = ["账号名称", "最近总积分", "最近报告时间", ...Array.from({ length: 4 }, (_, i) => [
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
   const rows = filtered.map((account) => `<tr>
-    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span><a class="delete-link" href="/accounts/delete?email=${encodeURIComponent(account.email)}&amp;next=${encodeURIComponent(refreshUrl)}" aria-label="删除 ${escapeHtml(account.email)} 的全部记录">删除全部记录</a></span></span></th>
+    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span>${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
-  const empty = `<tr><td colspan="11" class="empty"><div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p></td></tr>`;
+  const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
+  const empty = `<tr><td colspan="11" class="empty">${emptyContent}</td></tr>`;
 
   return shell(`
     <div class="heading">
       <div><p class="eyebrow">ACCOUNT OVERVIEW</p><h1>账户积分报告</h1><p class="description">每一次上报，都有迹可循。查看各账号的最新积分与最近 5 次记录。</p></div>
-      <a class="refresh" href="${escapeHtml(refreshUrl)}">${refreshIcon}刷新报告</a>
+      <div class="heading-actions">
+        <a class="refresh" href="${escapeHtml(refreshUrl)}">${refreshIcon}刷新报告</a>
+        <form class="manage-form" action="/" method="get">
+          ${query ? `<input type="hidden" name="q" value="${escapeHtml(query)}">` : ""}
+          <button class="manage-button" type="submit" name="manage" value="${manage ? "0" : "1"}" aria-pressed="${manage}">${manage ? "完成管理" : "管理账号"}</button>
+        </form>
+      </div>
     </div>
     ${deleted ? '<p class="notice" role="status">账号及全部报告已删除。</p>' : ""}
     <dl class="stats" aria-label="报告概览">
@@ -187,18 +264,20 @@ export function renderPage(accounts, query = "", { deleted = false } = {}) {
       <div class="toolbar">
         <h2 id="reports-title">全部账号<span class="count">${filtered.length}</span></h2>
         <form action="/" method="get" role="search">
+          ${manage ? '<input type="hidden" name="manage" value="1">' : ""}
           <div class="search">${searchIcon}<label class="sr-only" for="email-search">搜索账户邮箱</label><input id="email-search" name="q" type="search" maxlength="254" placeholder="搜索账户邮箱…" value="${escapeHtml(query)}"></div>
-          <button type="submit">搜索</button>${query ? '<a class="clear" href="/">清除</a>' : ""}
+          <button type="submit">搜索</button>${query ? `<a class="clear" href="${escapeHtml(clearUrl)}">清除</a>` : ""}
         </form>
       </div>
-      <div class="table-scroll" role="region" aria-label="账户积分与五次报告记录，可左右滚动" tabindex="0">
+      <div class="table-scroll desktop-reports" role="region" aria-label="账户积分与五次报告记录，可左右滚动" tabindex="0">
         <table>
           <caption class="sr-only">各账号最近收到的五份报告，按最新一份报告的报告时间降序排列。</caption>
           <thead><tr>${headers.map((title, index) => `<th scope="col"${index === 2 ? ' class="latest" aria-sort="descending"' : ""}>${title}${index === 2 ? '<span class="sort" aria-hidden="true">↓</span>' : ""}</th>`).join("")}</tr></thead>
           <tbody>${rows || empty}</tbody>
         </table>
       </div>
-      <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span>每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span></div>
+      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, refreshUrl, manage)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
+      <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
     </section>
     <footer><span>MyReport · 账户积分记录</span><span>时间按上报原值显示 · 刷新页面获取最新数据</span></footer>
   `, { authenticated: true });
