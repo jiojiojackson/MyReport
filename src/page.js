@@ -58,6 +58,9 @@ const STYLES = `
   tbody tr:last-child td, tbody tr:last-child th { border-bottom:0; }
   tbody tr:hover td, tbody tr:hover th { background:#f9fbf9; }
   tbody td.latest-points { font-weight:650; color:var(--accent); font-size:15px; }
+  .points-value { display:inline-flex; align-items:baseline; gap:5px; max-width:100%; }
+  .points-number { min-width:0; }
+  .points-increase { flex-shrink:0; color:#2c865e; font-size:.8em; font-weight:700; line-height:1; }
   tbody td.date { color:#7b8580; font-size:11px; }
   tbody td.missing { color:#b5beb8; }
   .account { display:flex; gap:10px; align-items:center; }
@@ -186,11 +189,19 @@ function shell(content, { authenticated = false, title = "账户积分报告 · 
 </html>`;
 }
 
+function pointsIncreased(reports) {
+  return reports.length > 1 && reports[0].total_points > reports[1].total_points;
+}
+
+function latestPoints(reports) {
+  return `<span class="points-value"><span class="points-number">${escapeHtml(reports[0].total_points)}</span>${pointsIncreased(reports) ? '<span class="points-increase" role="img" aria-label="较前一次积分增加" title="较前一次积分增加">↑</span>' : ""}</span>`;
+}
+
 function reportCells(reports) {
   return Array.from({ length: 5 }, (_, index) => {
     const report = reports[index];
     if (!report) return `<td class="missing">—</td><td class="missing">—</td>`;
-    return `<td${index === 0 ? ' class="latest-points"' : ""}>${escapeHtml(report.total_points)}</td><td class="date">${escapeHtml(report.report_time)}</td>`;
+    return `<td${index === 0 ? ' class="latest-points"' : ""}>${index === 0 ? latestPoints(reports) : escapeHtml(report.total_points)}</td><td class="date">${escapeHtml(report.report_time)}</td>`;
   }).join("");
 }
 
@@ -211,10 +222,11 @@ function reportTime(value) {
 
 function mobileAccount(account, returnTo, manage) {
   const [latest, ...history] = account.reports;
+  const widePoints = String(latest.total_points).length > (pointsIncreased(account.reports) ? 5 : 10);
   return `<article class="account-card" role="listitem">
     <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><h3 class="card-email">${escapeHtml(account.email)}</h3></header>
-    <dl class="card-latest${String(latest.total_points).length > 10 ? " card-latest-wide" : ""}" aria-label="最近报告">
-      <div><dt>最近总积分</dt><dd class="card-points">${escapeHtml(latest.total_points)}</dd></div>
+    <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
+      <div><dt>最近总积分</dt><dd class="card-points">${latestPoints(account.reports)}</dd></div>
       <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
     </dl>
     ${history.length ? `<details class="card-history"><summary>历史记录<span class="history-count">${history.length} 份</span></summary>
