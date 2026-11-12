@@ -4,27 +4,35 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.js";
+import { createSessionCookie } from "../src/auth.js";
 
 const API_KEY = "test-key-never-use-in-production";
 const ORIGIN = "https://myreport.example";
+const LOGIN_USERNAME = "test-viewer";
+const LOGIN_PASSWORD = "test-password-for-reports-only";
+const LOGIN_ENV = { LOGIN_USERNAME, LOGIN_PASSWORD };
 const example = { email: "alice@example.com", total_points: 1250.5, report_time: "2026-11-12 08:30" };
 let mf;
 let db;
+let sessionCookie;
 
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({
-    modules: ["index.js", "page.js"].map((filename) => ({
+    modules: ["index.js", "page.js", "auth.js"].map((filename) => ({
       type: "ESModule",
       path: fileURLToPath(new URL(`../src/${filename}`, import.meta.url)),
     })),
     compatibilityDate: "2026-07-01",
     d1Databases: ["DB"],
-    bindings: { API_KEY },
+    bindings: { API_KEY, ...LOGIN_ENV },
     log: new Log(LogLevel.ERROR),
   }));
   db = await mf.getD1Database("DB");
   const migration = await readFile(new URL("../migrations/0001_create_reports.sql", import.meta.url), "utf8");
   await db.batch(migration.split(";").map((sql) => sql.trim()).filter(Boolean).map((sql) => db.prepare(sql)));
+  const response = await login();
+  assert.equal(response.status, 303);
+  sessionCookie = response.headers.get("set-cookie").split(";")[0];
 });
 
 beforeEach(async () => {
@@ -47,8 +55,24 @@ function post(body = example, { path = "/api/reports", key = API_KEY, headers = 
   });
 }
 
+function visit(path = "/", options = {}) {
+  return mf.dispatchFetch(ORIGIN + path, { redirect: "manual", ...options });
+}
+
+function read(path = "/", options = {}) {
+  return visit(path, { ...options, headers: { Cookie: sessionCookie, ...options.headers } });
+}
+
+function login(values = {}, headers = {}) {
+  return visit("/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, ...headers },
+    body: new URLSearchParams({ username: LOGIN_USERNAME, password: LOGIN_PASSWORD, next: "/", ...values }).toString(),
+  });
+}
+
 async function data() {
-  const response = await mf.dispatchFetch(ORIGIN + "/api/reports");
+  const response = await read("/api/reports");
   assert.equal(response.status, 200);
   return (await response.json()).data;
 }
@@ -203,7 +227,7 @@ test("accounts sort by the report time of the last receipt, with deterministic e
   // 这个账号曾收到更晚的报告，但最新收到的是一份旧报告，应按旧报告时间排序。
   await post({ ...example, email: "c@example.com", report_time: "2020-01-01 00:00" });
   assert.deepEqual((await data()).map((account) => account.email), ["a@example.com", "d@example.com", "b@example.com", "c@example.com"]);
-  const html = await (await mf.dispatchFetch(ORIGIN)).text();
+  const html = await (await read()).text();
   assert.ok(html.indexOf('title="a@example.com"') < html.indexOf('title="d@example.com"'));
   assert.ok(html.indexOf('title="d@example.com"') < html.indexOf('title="b@example.com"'));
   assert.ok(html.indexOf('title="b@example.com"') < html.indexOf('title="c@example.com"'));
@@ -249,7 +273,7 @@ test("a failed report insert also rolls back account creation", async () => {
 
 test("the page has exactly the eleven required columns and missing history placeholders", async () => {
   await post();
-  const response = await mf.dispatchFetch(ORIGIN);
+  const response = await read();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /text\/html/);
   const html = await response.text();
@@ -265,7 +289,7 @@ test("the page has exactly the eleven required columns and missing history place
 
 test("an empty database displays the waiting state and an empty JSON array", async () => {
   assert.deepEqual(await data(), []);
-  const html = await (await mf.dispatchFetch(ORIGIN)).text();
+  const html = await (await read()).text();
   assert.ok(html.includes("等待第一份报告"));
   assert.ok(html.includes('colspan="11"'));
 });
@@ -273,10 +297,10 @@ test("an empty database displays the waiting state and an empty JSON array", asy
 test("email search filters the page while preserving table order", async () => {
   await post();
   await post({ ...example, email: "bob@example.com" });
-  const html = await (await mf.dispatchFetch(ORIGIN + "/?q=ALICE")).text();
+  const html = await (await read("/?q=ALICE")).text();
   assert.ok(html.includes('title="alice@example.com"'));
   assert.ok(!html.includes('title="bob@example.com"'));
-  const emptyHtml = await (await mf.dispatchFetch(ORIGIN + "/?q=nobody")).text();
+  const emptyHtml = await (await read("/?q=nobody")).text();
   assert.ok(emptyHtml.includes("没有找到匹配的账号"));
 });
 
@@ -284,12 +308,12 @@ test("mailbox and search markup is escaped and SQL values are bound", async () =
   const email = "<svg/onload=alert(1)>@example.com";
   assert.equal((await post({ ...example, email })).status, 201);
   assert.equal((await post({ ...example, email: "o'hara@example.com" })).status, 201);
-  const html = await (await mf.dispatchFetch(ORIGIN)).text();
+  const html = await (await read()).text();
   assert.ok(!html.includes("<svg/onload=alert(1)>"));
   assert.ok(html.includes("&lt;svg/onload=alert(1)&gt;@example.com"));
   assert.ok(html.includes("o&#39;hara@example.com"));
   const query = '\"><script>alert(1)</script>';
-  const searchHtml = await (await mf.dispatchFetch(ORIGIN + "/?q=" + encodeURIComponent(query))).text();
+  const searchHtml = await (await read("/?q=" + encodeURIComponent(query))).text();
   assert.ok(!searchHtml.includes("<script>"));
   assert.ok(searchHtml.includes("&quot;&gt;&lt;script&gt;"));
   assert.equal((await data()).length, 2);
@@ -297,17 +321,17 @@ test("mailbox and search markup is escaped and SQL values are bound", async () =
 
 test("page and API responses are not cached; the page disallows scripts", async () => {
   for (const path of ["/", "/api/reports"]) {
-    const response = await mf.dispatchFetch(ORIGIN + path);
+    const response = await read(path);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
-  const page = await mf.dispatchFetch(ORIGIN);
+  const page = await read();
   assert.match(page.headers.get("content-security-policy"), /script-src 'none'/);
 });
 
 test("HEAD, unsupported methods and unknown paths return appropriate responses", async () => {
   for (const path of ["/", "/api/reports"]) {
-    const response = await mf.dispatchFetch(ORIGIN + path, { method: "HEAD" });
+    const response = await read(path, { method: "HEAD" });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "");
   }
@@ -318,10 +342,219 @@ test("HEAD, unsupported methods and unknown paths return appropriate responses",
 });
 
 test("missing database bindings return useful errors without exposing internals", async () => {
-  const page = await worker.fetch(new Request(ORIGIN), {});
+  const page = await worker.fetch(new Request(ORIGIN, { headers: { Cookie: sessionCookie } }), LOGIN_ENV);
   assert.equal(page.status, 503);
   assert.ok((await page.text()).includes("报告暂时无法加载"));
-  const api = await worker.fetch(new Request(ORIGIN + "/api/reports"), {});
+  const api = await worker.fetch(new Request(ORIGIN + "/api/reports", { headers: { Cookie: sessionCookie } }), LOGIN_ENV);
   assert.equal(api.status, 503);
   assert.equal((await api.json()).success, false);
+});
+
+test("unauthenticated page requests redirect to login without exposing report data", async () => {
+  await post();
+  const response = await visit();
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), "/login");
+  assert.ok(!(await response.text()).includes(example.email));
+  const search = await visit("/?q=alice");
+  assert.equal(search.status, 302);
+  assert.equal(search.headers.get("location"), "/login?next=%2F%3Fq%3Dalice");
+});
+
+test("GET API cannot be bypassed with an API key or login credentials in a query", async () => {
+  await post();
+  const response = await visit("/api/reports", { headers: { "api-key": API_KEY } });
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { success: false, error: "请先登录后再查看报告。" });
+  assert.equal((await visit("/api/reports?username=" + LOGIN_USERNAME + "&password=" + LOGIN_PASSWORD)).status, 401);
+});
+
+test("login page has a POST form and never reveals the configured credentials", async () => {
+  const response = await visit("/login");
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const html = await response.text();
+  assert.ok(html.includes("登录查看报告"));
+  assert.ok(html.includes('action="/login" method="post"'));
+  assert.ok(html.includes('type="password" autocomplete="current-password"'));
+  assert.ok(!html.includes(LOGIN_USERNAME));
+  assert.ok(!html.includes(LOGIN_PASSWORD));
+  assert.ok(!html.includes(API_KEY));
+});
+
+test("successful login issues a secure signed cookie that unlocks the page and API", async () => {
+  await post();
+  const response = await login();
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/");
+  const setCookie = response.headers.get("set-cookie");
+  assert.match(setCookie, /^__Host-myreport_session=/);
+  for (const flag of ["Max-Age=43200", "Path=/", "HttpOnly", "SameSite=Strict", "Secure"]) {
+    assert.ok(setCookie.includes(flag), flag);
+  }
+  assert.ok(!setCookie.includes("Domain="));
+  assert.ok(!setCookie.includes(LOGIN_PASSWORD));
+  const cookie = setCookie.split(";")[0];
+  assert.equal((await visit("/", { headers: { Cookie: cookie } })).status, 200);
+  const api = await visit("/api/reports", { headers: { Cookie: cookie } });
+  assert.equal(api.status, 200);
+  assert.equal((await api.json()).data[0].email, example.email);
+  const html = await (await read()).text();
+  assert.ok(html.includes('action="/logout" method="post"'));
+  assert.ok(html.includes("退出登录"));
+});
+
+test("incorrect and missing login credentials return the same error without setting cookies", async () => {
+  for (const values of [
+    { username: "wrong" }, { password: "wrong" }, { username: "", password: "" },
+    { username: LOGIN_USERNAME.toUpperCase() }, { password: " " + LOGIN_PASSWORD },
+  ]) {
+    const response = await login(values);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("set-cookie"), null);
+    const html = await response.text();
+    assert.ok(html.includes("账号或密码不正确。"));
+    assert.ok(!html.includes(LOGIN_PASSWORD));
+  }
+  await assertNoWrites();
+});
+
+test("empty or missing login settings keep page and JSON reports closed", async () => {
+  await post();
+  for (const settings of [
+    {}, { LOGIN_USERNAME }, { LOGIN_PASSWORD },
+    { ...LOGIN_ENV, LOGIN_USERNAME: "" }, { ...LOGIN_ENV, LOGIN_PASSWORD: "   " },
+  ]) {
+    const env = { DB: db, API_KEY, ...settings };
+    for (const path of ["/", "/login", "/api/reports"]) {
+      const response = await worker.fetch(new Request(ORIGIN + path, { headers: { Cookie: sessionCookie } }), env);
+      assert.equal(response.status, 503);
+      assert.ok(!(await response.text()).includes(example.email));
+    }
+  }
+});
+
+test("POST reporting still works when webpage login settings are absent", async () => {
+  for (const path of ["/", "/api/reports"]) {
+    const response = await worker.fetch(new Request(ORIGIN + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "api-key": API_KEY },
+      body: JSON.stringify(example),
+    }), { DB: db, API_KEY });
+    assert.equal(response.status, 201);
+  }
+  assert.equal((await data())[0].reports.length, 2);
+});
+
+test("a website session alone does not authorize a report write", async () => {
+  const response = await post(example, { key: null, headers: { Cookie: sessionCookie } });
+  assert.equal(response.status, 401);
+  await assertNoWrites();
+});
+
+test("modified, malformed, duplicate and expired session cookies are rejected", async () => {
+  const [name, token] = sessionCookie.split("=");
+  const [payload, signature] = token.split(".");
+  const alteredPayload = (payload[0] === "A" ? "B" : "A") + payload.slice(1);
+  const alteredSignature = (signature[0] === "A" ? "B" : "A") + signature.slice(1);
+  const expired = (await createSessionCookie(new Request(ORIGIN), LOGIN_ENV, Date.now() - 13 * 60 * 60 * 1000)).split(";")[0];
+  for (const cookie of [
+    `${name}=${alteredPayload}.${signature}`, `${name}=${payload}.${alteredSignature}`,
+    `${name}=malformed`, `${name}=a.b`, `${name}=`, `${name}=${"a".repeat(1200)}.b`,
+    `${sessionCookie}; ${sessionCookie}`, expired,
+  ]) {
+    assert.equal((await visit("/api/reports", { headers: { Cookie: cookie } })).status, 401);
+    assert.equal((await visit("/", { headers: { Cookie: cookie } })).status, 302);
+  }
+});
+
+test("changing either login variable immediately invalidates existing cookies", async () => {
+  for (const changes of [{ LOGIN_USERNAME: "new-viewer" }, { LOGIN_PASSWORD: "new-password" }]) {
+    const response = await worker.fetch(new Request(ORIGIN + "/api/reports", {
+      headers: { Cookie: sessionCookie },
+    }), { DB: db, ...LOGIN_ENV, ...changes });
+    assert.equal(response.status, 401);
+  }
+});
+
+test("session signatures are bound to the origin", async () => {
+  const response = await worker.fetch(new Request("https://another.example/api/reports", {
+    headers: { Cookie: sessionCookie },
+  }), { DB: db, ...LOGIN_ENV });
+  assert.equal(response.status, 401);
+});
+
+test("logout clears the browser cookie and redirects to the login page", async () => {
+  const response = await read("/logout", { method: "POST", headers: { Origin: ORIGIN } });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/login");
+  assert.match(response.headers.get("set-cookie"), /^__Host-myreport_session=; Max-Age=0;/);
+  assert.equal((await visit("/api/reports")).status, 401);
+  const getLogout = await read("/logout");
+  assert.equal(getLogout.status, 405);
+  assert.equal(getLogout.headers.get("allow"), "POST");
+});
+
+test("login and logout reject cross-origin form submissions", async () => {
+  for (const headers of [{ Origin: "https://evil.example" }, { Origin: "null" }, { "Sec-Fetch-Site": "cross-site" }]) {
+    assert.equal((await login({}, headers)).status, 403);
+    const response = await read("/logout", { method: "POST", headers: { Origin: ORIGIN, ...headers } });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("set-cookie"), null);
+  }
+});
+
+test("login returns only to the report page and preserves email searches", async () => {
+  const filtered = await login({ next: "/?q=alice%40example.com" });
+  assert.equal(filtered.headers.get("location"), "/?q=alice%40example.com");
+  for (const next of ["https://evil.example", "//evil.example", "/\\evil.example", "/api/reports", "javascript:alert(1)"]) {
+    const response = await login({ next });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/");
+  }
+  const existing = await read("/login?next=%2F%3Fq%3Dalice");
+  assert.equal(existing.status, 302);
+  assert.equal(existing.headers.get("location"), "/?q=alice");
+});
+
+test("login form escapes reflected fields and never echoes the password", async () => {
+  const response = await login({ username: '\"><script>alert(1)</script>', password: "do-not-echo-this", next: '/?q=\"><script>alert(2)</script>' });
+  assert.equal(response.status, 401);
+  const html = await response.text();
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("&quot;&gt;&lt;script&gt;"));
+  assert.ok(!html.includes("do-not-echo-this"));
+});
+
+test("login form requests enforce the body limit and form content type", async () => {
+  assert.equal((await login({}, { "Content-Type": "application/json" })).status, 415);
+  assert.equal((await login({ password: "x".repeat(17000) })).status, 413);
+  const empty = await visit("/login", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN }, body: "",
+  });
+  assert.equal(empty.status, 401);
+  await assertNoWrites();
+});
+
+test("unauthenticated HEAD requests never return an HTML or JSON body", async () => {
+  for (const [path, status] of [["/", 302], ["/login", 200], ["/api/reports", 401], ["/logout", 405]]) {
+    const response = await visit(path, { method: "HEAD" });
+    assert.equal(response.status, status);
+    assert.equal(await response.text(), "");
+  }
+});
+
+test("local HTTP development uses a host-only HttpOnly cookie", async () => {
+  const request = new Request("http://127.0.0.1:8787/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "http://127.0.0.1:8787" },
+    body: new URLSearchParams({ username: LOGIN_USERNAME, password: LOGIN_PASSWORD }),
+  });
+  const response = await worker.fetch(request, LOGIN_ENV);
+  assert.equal(response.status, 303);
+  const cookie = response.headers.get("set-cookie");
+  assert.match(cookie, /^myreport_session=/);
+  assert.ok(cookie.includes("HttpOnly"));
+  assert.ok(!cookie.includes("Secure"));
+  assert.ok(!cookie.includes("Domain="));
 });

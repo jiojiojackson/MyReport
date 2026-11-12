@@ -1,11 +1,15 @@
-import { renderPage, renderUnavailablePage } from "./page.js";
+import { renderLoginPage, renderPage, renderUnavailablePage } from "./page.js";
+import {
+  clearSessionCookie, createSessionCookie, credentialsMatch,
+  isAuthenticated, loginConfigured, safeReturnTo, secretMatches,
+} from "./auth.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
-const encoder = new TextEncoder();
 const RESPONSE_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
+  // no-referrer 会把浏览器表单 POST 的 Origin 置为 null，影响同源校验。
+  "Referrer-Policy": "same-origin",
   "X-Robots-Tag": "noindex, noarchive",
 };
 const HTML_HEADERS = {
@@ -29,25 +33,18 @@ function json(body, status = 200, headers = {}) {
   });
 }
 
-async function keyMatches(provided, expected) {
-  if (typeof provided !== "string" || provided.length === 0) return false;
-  const digests = await Promise.all(
-    [provided, expected].map((key) =>
-      crypto.subtle.digest("SHA-256", encoder.encode(key)),
-    ),
-  );
-  const left = new Uint8Array(digests[0]);
-  const right = new Uint8Array(digests[1]);
-  let difference = 0;
-  for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i];
-  return difference === 0;
+function html(content, status = 200) {
+  return new Response(content, { status, headers: HTML_HEADERS });
 }
 
-async function readJson(request) {
-  const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-  if (type !== "application/json") {
-    throw new HttpError(415, "Content-Type 必须是 application/json。");
-  }
+function redirect(location, status = 302, headers = {}) {
+  return new Response(null, {
+    status,
+    headers: { ...RESPONSE_HEADERS, Location: location, ...headers },
+  });
+}
+
+async function readBodyText(request) {
   if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) {
     throw new HttpError(413, "请求体不能超过 16 KiB。");
   }
@@ -78,9 +75,22 @@ async function readJson(request) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new HttpError(400, "请求体必须使用有效的 UTF-8 编码。");
+  }
+}
+
+async function readJson(request) {
+  const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (type !== "application/json") {
+    throw new HttpError(415, "Content-Type 必须是 application/json。");
+  }
+  const text = await readBodyText(request);
   let body;
   try {
-    body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    body = JSON.parse(text);
   } catch {
     throw new HttpError(400, "请求体必须是有效的 UTF-8 JSON。");
   }
@@ -133,11 +143,11 @@ async function receiveReport(request, env) {
   }
   const headerKey = request.headers.get("api-key");
   // 提供请求头时优先使用它，错误的请求头不能被请求体中的正确密钥覆盖。
-  if (headerKey !== null && !(await keyMatches(headerKey, env.API_KEY))) {
+  if (headerKey !== null && !(await secretMatches(headerKey, env.API_KEY))) {
     throw new HttpError(401, "api-key 缺失或不正确。");
   }
   const body = await readJson(request);
-  if (headerKey === null && !(await keyMatches(body["api-key"] ?? body.api_key, env.API_KEY))) {
+  if (headerKey === null && !(await secretMatches(body["api-key"] ?? body.api_key, env.API_KEY))) {
     throw new HttpError(401, "api-key 缺失或不正确。");
   }
   const report = validateReport(body);
@@ -181,42 +191,90 @@ async function listReports(env) {
   );
 }
 
+function checkFormOrigin(request) {
+  const origin = request.headers.get("origin");
+  if ((origin !== null && origin !== new URL(request.url).origin) ||
+      request.headers.get("sec-fetch-site") === "cross-site") {
+    throw new HttpError(403, "请在本站页面提交登录或退出请求。");
+  }
+}
+
+async function handleLogin(request, env, url) {
+  if (!loginConfigured(env)) return html(renderLoginPage({ configured: false }), 503);
+  if (request.method !== "POST") {
+    const returnTo = safeReturnTo(url.searchParams.get("next"));
+    if (await isAuthenticated(request, env)) return redirect(returnTo);
+    return html(renderLoginPage({ returnTo }));
+  }
+
+  checkFormOrigin(request);
+  const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (type !== "application/x-www-form-urlencoded") {
+    throw new HttpError(415, "登录请求必须使用表单编码。");
+  }
+  const form = new URLSearchParams(await readBodyText(request));
+  const returnTo = safeReturnTo(form.get("next"));
+  const username = form.get("username") ?? "";
+  if (!(await credentialsMatch(username, form.get("password"), env))) {
+    return html(renderLoginPage({ error: "账号或密码不正确。", username, returnTo }), 401);
+  }
+  return redirect(returnTo, 303, { "Set-Cookie": await createSessionCookie(request, env) });
+}
+
+async function handleRequest(request, env) {
+  const url = new URL(request.url);
+  const isPage = url.pathname === "/";
+  const isApi = url.pathname === "/api/reports";
+  const isLogin = url.pathname === "/login";
+  const isLogout = url.pathname === "/logout";
+  if (!isPage && !isApi && !isLogin && !isLogout) {
+    return json({ success: false, error: "接口不存在。" }, 404);
+  }
+  const allowed = isLogout ? ["POST"] : ["GET", "HEAD", "POST"];
+  if (!allowed.includes(request.method)) {
+    return json({ success: false, error: "请求方法不支持。" }, 405, { Allow: allowed.join(", ") });
+  }
+
+  try {
+    if (isLogin) return await handleLogin(request, env, url);
+    if (isLogout) {
+      checkFormOrigin(request);
+      return redirect("/login", 303, { "Set-Cookie": clearSessionCookie(request) });
+    }
+    // 自动上报只验证 API_KEY，不依赖网页登录状态或登录环境变量。
+    if (request.method === "POST") return await receiveReport(request, env);
+    if (!loginConfigured(env)) {
+      if (isPage) return html(renderLoginPage({ configured: false }), 503);
+      throw new HttpError(503, "请管理员配置 LOGIN_USERNAME 和 LOGIN_PASSWORD。");
+    }
+    if (!(await isAuthenticated(request, env))) {
+      if (isApi) throw new HttpError(401, "请先登录后再查看报告。");
+      const returnTo = safeReturnTo(url.pathname + url.search);
+      return redirect(returnTo === "/" ? "/login" : `/login?next=${encodeURIComponent(returnTo)}`);
+    }
+    const accounts = await listReports(env);
+    if (isApi) return json({ success: true, data: accounts });
+    const query = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
+    return html(renderPage(accounts, query));
+  } catch (error) {
+    const status = error instanceof HttpError ? error.status : 500;
+    const message = error instanceof HttpError
+      ? error.message
+      : "服务暂时不可用，请检查 D1 绑定和数据库迁移后重试。";
+    if (!(error instanceof HttpError)) {
+      console.error("Worker request failed:", error instanceof Error ? error.message : "Unknown error");
+    }
+    if (isLogin) return html(renderLoginPage({ error: message, configured: loginConfigured(env) }), status);
+    if (isPage && ["GET", "HEAD"].includes(request.method)) {
+      return html(renderUnavailablePage(), status);
+    }
+    return json({ success: false, error: message }, status);
+  }
+}
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const isPage = url.pathname === "/";
-    const isApi = url.pathname === "/api/reports";
-    if (!isPage && !isApi) return json({ success: false, error: "接口不存在。" }, 404);
-    if (!["GET", "HEAD", "POST"].includes(request.method)) {
-      return json({ success: false, error: "请求方法不支持。" }, 405, { Allow: "GET, HEAD, POST" });
-    }
-
-    try {
-      if (request.method === "POST") return await receiveReport(request, env);
-      const accounts = await listReports(env);
-      if (isApi) {
-        const response = json({ success: true, data: accounts });
-        return request.method === "HEAD" ? new Response(null, response) : response;
-      }
-      const query = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
-      return new Response(request.method === "HEAD" ? null : renderPage(accounts, query), {
-        headers: HTML_HEADERS,
-      });
-    } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
-      const message = error instanceof HttpError
-        ? error.message
-        : "服务暂时不可用，请检查 D1 绑定和数据库迁移后重试。";
-      if (!(error instanceof HttpError)) {
-        console.error("D1 request failed:", error instanceof Error ? error.message : "Unknown error");
-      }
-      if (isPage && ["GET", "HEAD"].includes(request.method)) {
-        return new Response(request.method === "HEAD" ? null : renderUnavailablePage(), {
-          status,
-          headers: HTML_HEADERS,
-        });
-      }
-      return json({ success: false, error: message }, status);
-    }
+    const response = await handleRequest(request, env);
+    return request.method === "HEAD" ? new Response(null, response) : response;
   },
 };

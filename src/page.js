@@ -12,6 +12,9 @@ const STYLES = `
   .brandmark i:nth-child(3) { height:15px; opacity:.5; }
   .top-note { color:var(--muted); font-size:12px; letter-spacing:.2px; }
   .top-note b { display:inline-block; width:6px; height:6px; border-radius:50%; background:#409379; margin-right:8px; vertical-align:middle; }
+  .top-actions { display:flex; align-items:center; gap:22px; }
+  .top-actions .logout-form { width:auto; }
+  .logout-button { background:#fff; color:var(--muted); }
   main { max-width:1800px; margin:0 auto; padding:48px 40px 28px; }
   .eyebrow { color:var(--accent); font-size:11px; letter-spacing:2px; font-weight:700; margin:0 0 12px; }
   .heading { display:flex; justify-content:space-between; align-items:center; gap:24px; margin-bottom:32px; }
@@ -65,10 +68,21 @@ const STYLES = `
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .unavailable { padding:65px 24px; text-align:center; }
   .unavailable p { color:var(--muted); line-height:1.8; margin-bottom:24px; }
+  .login-card { max-width:420px; margin:56px auto 0; padding:34px; background:#fff; border:1px solid var(--line); border-radius:10px; }
+  .login-card h1 { font-size:27px; margin-top:16px; }
+  .login-form { display:grid; gap:20px; margin-top:28px; }
+  .login-form label { display:grid; gap:9px; font-size:13px; font-weight:500; }
+  .login-form input { width:100%; min-width:0; padding:12px; border:1px solid #dbe4de; border-radius:6px; background:#fbfcfb; font-size:14px; }
+  .login-form .login-submit { width:100%; padding:12px; background:var(--accent); color:#fff; font-size:14px; font-weight:600; border-color:var(--accent); }
+  .login-form .login-submit:hover { background:#205746; }
+  .login-error { margin:22px 0 0; padding:11px 13px; border:1px solid #f0d6d2; border-radius:6px; background:#fff7f5; color:#9b4d40; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
+  .login-note { margin:22px 0 0; color:var(--muted); text-align:center; font-size:11px; line-height:1.8; }
   @media (min-width:1900px) { table { min-width:100%; } }
   @media (max-width:700px) {
     .topbar { height:64px; padding:0 20px; }
     .top-note { font-size:10px; }
+    .top-actions .top-note { display:none; }
+    .login-card { margin-top:20px; padding:26px 22px; }
     main { padding:30px 18px 20px; }
     .heading { gap:12px; margin-bottom:26px; align-items:flex-start; }
     h1 { font-size:26px; }
@@ -99,7 +113,7 @@ function escapeHtml(value) {
 const refreshIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg>`;
 const searchIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>`;
 
-function shell(content) {
+function shell(content, { authenticated = false, title = "账户积分报告 · MyReport" } = {}) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -108,13 +122,13 @@ function shell(content) {
   <meta name="color-scheme" content="light">
   <meta name="description" content="账户积分报告，每个账号最近五次上报一目了然。">
   <meta name="robots" content="noindex, noarchive">
-  <title>账户积分报告 · MyReport</title>
+  <title>${escapeHtml(title)}</title>
   <style>${STYLES}</style>
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="MyReport 首页"><span class="brandmark" aria-hidden="true"><i></i><i></i><i></i></span>MyReport</a>
-    <span class="top-note">账户数据 · 轻松掌握</span>
+    <div class="top-actions"><span class="top-note">账户数据 · 轻松掌握</span>${authenticated ? '<form class="logout-form" action="/logout" method="post"><button class="logout-button" type="submit">退出登录</button></form>' : ""}</div>
   </header>
   <main>${content}</main>
 </body>
@@ -171,9 +185,25 @@ export function renderPage(accounts, query = "") {
       <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span>每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span></div>
     </section>
     <footer><span>MyReport · 账户积分记录</span><span>时间按上报原值显示 · 刷新页面获取最新数据</span></footer>
-  `);
+  `, { authenticated: true });
 }
 
 export function renderUnavailablePage() {
   return shell(`<section class="report unavailable"><p class="eyebrow">MYREPORT</p><h1>报告暂时无法加载</h1><p>请稍后重试。管理员可检查 D1 数据库绑定与数据库迁移是否已完成。</p><a class="refresh" href="/">${refreshIcon}重新加载</a></section>`);
+}
+
+export function renderLoginPage({ error = "", username = "", returnTo = "/", configured = true } = {}) {
+  const message = configured ? error : "登录服务尚未配置，请联系管理员设置登录账号和密码。";
+  return shell(`<section class="login-card" aria-labelledby="login-title">
+    <p class="eyebrow">WELCOME BACK</p>
+    <h1 id="login-title">登录查看报告</h1>
+    <p class="description">登录后查看各账号的积分与最近 5 次报告。</p>
+    ${message ? `<p class="login-error" role="alert">${escapeHtml(message)}</p>` : ""}
+    ${configured ? `<form class="login-form" action="/login" method="post">
+      <input type="hidden" name="next" value="${escapeHtml(returnTo)}">
+      <label for="login-username">账号<input id="login-username" name="username" type="text" autocomplete="username" maxlength="254" value="${escapeHtml(username.slice(0, 254))}" required></label>
+      <label for="login-password">密码<input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="4096" required></label>
+      <button class="login-submit" type="submit">登录</button>
+    </form><p class="login-note">登录状态保留 12 小时，可随时退出登录。</p>` : ""}
+  </section>`, { title: "登录 · MyReport" });
 }

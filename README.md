@@ -4,7 +4,7 @@
 
 ## 功能与数据规则
 
-- 打开 Worker 根地址 `/`，直接查看报告表格；支持邮箱关键词搜索、手动刷新和手机横向滚动。
+- 打开 Worker 根地址 `/`，登录后查看报告表格；支持邮箱关键词搜索、手动刷新和手机横向滚动。
 - `POST /api/reports` 接收报告，使用环境变量 `API_KEY` 验证密钥。`POST /` 也可使用。
 - 邮箱去除首尾空白并统一为小写，作为账号唯一主键；每个邮箱**只保留最后收到的 5 份报告**。
 - 历史记录按数据库接收顺序从新到旧排列；同一分钟、多次相同积分或相同报告时间的上报仍分别保存。
@@ -22,7 +22,19 @@
 
 例如，先后收到某个邮箱 6 份报告，积分分别为 `100、200、300、400、500、600`，这一行会显示 `600、500、400、300、200`。如果最后一份补发报告的时间早于之前的报告，它仍会成为“最近”记录，整行也会按这份报告的时间排序。
 
-网页和 `GET /api/reports` 可直接访问；`API_KEY` 用于保护 POST 写入接口。
+网页和 `GET /api/reports` 都需要登录；`API_KEY` 用于保护 POST 写入接口。
+
+## 网页登录认证
+
+- 在 Worker 运行时环境变量中设置 **`LOGIN_USERNAME`**（登录账号）和 **`LOGIN_PASSWORD`**（登录密码）。这是一个共享的报告查看账号，与上报消息里的账户邮箱无关。
+- 打开 `/` 会自动进入 `/login`。输入账号和密码后即可查看报告；此前的邮箱搜索条件会保留。
+- 账号和密码按原值匹配，区分大小写。未配置任一变量，或变量为空、全为空白时，报告页面和读取接口返回 `503`，不会开放匿名访问。
+- 登录状态保留 **12 小时**，到期后需要重新登录。报告页右上角可点击“退出登录”。
+- 修改任一登录变量并使其生效后，所有旧登录会话立即失效，需要使用新的凭据登录。
+- 浏览器通过签名 Cookie 保持登录，不需要在每次刷新时输入密码。生产地址使用 HTTPS，Cookie 设置 `Secure`、`HttpOnly`、`SameSite=Strict`，且仅供当前站点使用；本机 HTTP 开发自动使用本机 Cookie。
+- **POST 上报继续只验证 `API_KEY`**，不要求网页登录；网页登录状态也不能替代上报密钥。
+
+已有部署升级时，在该 Worker 的 **Settings → Variables and Secrets** 添加 `LOGIN_USERNAME` 和 `LOGIN_PASSWORD` 并保存部署即可，不需要修改 D1 表结构。具体配置步骤如下。
 
 ## 部署：Cloudflare 连接 GitHub
 
@@ -52,7 +64,7 @@
 
 4. 如果数据库名称不同，同时修改 `database_name`；绑定名保持为 **`DB`**。将修改提交到 GitHub 的 `main` 分支。可以直接在 GitHub 网页编辑这个文件。
 
-Database ID 是资源标识，可以提交到仓库；真实 API 密钥应放在 Cloudflare 的 Secret 中。
+Database ID 是资源标识，可以提交到仓库；真实 API 密钥和登录密码应放在 Cloudflare 的 Secret 中。
 
 ### 2. 连接 GitHub 并部署 Worker
 
@@ -75,19 +87,26 @@ Database ID 是资源标识，可以提交到仓库；真实 API 密钥应放在
 
 这是 Cloudflare Workers Builds 直接拉取 GitHub 的部署流程；仓库附带的 GitHub Actions 只做测试和构建检查，不负责部署，也不需要 GitHub 中配置 Cloudflare 密钥。
 
-### 3. 设置运行时 API_KEY
+### 3. 设置运行时环境变量
 
 1. 打开已经部署的 Worker，进入 **Settings → Variables and Secrets → Add**。
-2. 类型选择 **Secret**，名称填写 **`API_KEY`**，值填写自己生成的足够长的随机密钥。
-3. 保存并部署，使变量生效。不要将真实密钥写入代码、`wrangler.jsonc` 或 README。
+2. 添加以下三个运行时变量，建议类型均选择 **Secret**：
 
-**此处是 Worker 的运行时变量，不是 Settings → Builds 中的构建变量。** 未设置或设置为空时，POST 接口返回 `503`，不会接收消息。读取网页不需要 API_KEY。
+   | 名称 | 用途 | 填写内容 |
+   | --- | --- | --- |
+   | `API_KEY` | POST 上报鉴权 | 自己生成的足够长的随机密钥 |
+   | `LOGIN_USERNAME` | 报告页登录账号 | 自己设置的查看账号，例如 `admin` |
+   | `LOGIN_PASSWORD` | 报告页登录密码 | 自己设置的强密码 |
+
+3. 保存并部署，使变量生效。不要将真实密钥、密码写入代码、`wrangler.jsonc` 或 README。登录账号也可以使用普通文本环境变量，代码同样支持。
+
+**此处是 Worker 的运行时变量，不是 Settings → Builds 中的构建变量。** `API_KEY` 未设置或为空时，POST 接口返回 `503`；登录账号或密码未配置时，报告读取返回 `503`。两个鉴权流程相互独立。
 
 项目设置了 `keep_vars: true`，后续 Git 部署会保留控制台配置的普通变量；已配置的 Secret 也会被保留。
 
 ### 4. 访问与后续更新
 
-- 部署完成后，访问 Cloudflare 提供的地址，例如 `https://myreport.<你的子域>.workers.dev/`，即可看到表格。未收到数据时会显示“等待第一份报告”。
+- 部署完成后，访问 Cloudflare 提供的地址，例如 `https://myreport.<你的子域>.workers.dev/`，使用设置的登录账号和密码进入表格。未收到数据时会显示“等待第一份报告”。
 - 在 Worker 的 Bindings 中，可以确认 D1 绑定名为 `DB`，目标数据库与配置一致。
 - 使用下面的 POST 示例发送一条报告，刷新页面检查结果。
 - 后续推送到 `main` 会触发 Cloudflare 自动迁移、部署；D1 数据不会因代码部署丢失。
@@ -205,17 +224,31 @@ with urlopen(request, timeout=20) as response:
 | HTTP 状态码 | 含义 |
 | --- | --- |
 | `400` | JSON 格式、邮箱、积分或报告时间不符合要求 |
-| `401` | 密钥缺失或不匹配 |
+| `401` | 密钥缺失或不匹配；读取报告时也表示未登录或登录已过期 |
 | `404` | 路径不存在 |
 | `405` | 请求方法不支持 |
 | `413` | 请求体超过 16 KiB |
 | `415` | Content-Type 不是 application/json |
 | `500` | 数据库操作失败，例如迁移尚未执行 |
-| `503` | Worker 未配置 API_KEY 或未绑定 DB |
+| `503` | Worker 未配置 API_KEY、未绑定 DB；读取报告时也可能是未配置登录账号或密码 |
 
 ### 读取 JSON 报告
 
-`GET /api/reports` 返回与网页相同顺序的数据，`reports[0]` 表示最后收到的一份，最多 5 项：
+`GET /api/reports` **需要有效的网页登录 Cookie**，返回与网页相同顺序的数据，`reports[0]` 表示最后收到的一份，最多 5 项。浏览器登录后可直接打开此地址；未登录时返回 `401`，传入上报用的 API-Key 不能代替网页登录。
+
+如果需要从命令行读取，可先登录并保存 Cookie，再查询：
+
+```bash
+curl --fail-with-body --request POST 'https://myreport.<你的子域>.workers.dev/login' \
+  --cookie-jar '/tmp/myreport-cookies.txt' \
+  --data-urlencode 'username=替换为LOGIN_USERNAME' \
+  --data-urlencode 'password=替换为LOGIN_PASSWORD'
+
+curl --fail-with-body 'https://myreport.<你的子域>.workers.dev/api/reports' \
+  --cookie '/tmp/myreport-cookies.txt'
+```
+
+登录成功返回 `303` 并设置 Cookie；第二个请求成功后返回：
 
 ```json
 {
@@ -243,18 +276,26 @@ npm ci
 cp .dev.vars.example .dev.vars
 ```
 
-把 `.dev.vars` 的 `API_KEY` 改为本地测试密钥，然后执行：
+在 `.dev.vars` 中设置自己的本地测试值：
+
+```dotenv
+API_KEY="你的本地上报密钥"
+LOGIN_USERNAME="你的本地登录账号"
+LOGIN_PASSWORD="你的本地登录密码"
+```
+
+然后执行：
 
 ```bash
 npm run db:migrate:local
 npm run dev
 ```
 
-打开终端显示的本地地址（通常为 `http://localhost:8787/`）；把 curl 示例中的 URL 换成本地地址、密钥换成本地密钥即可测试。
+打开终端显示的本地地址（通常为 `http://localhost:8787/`），输入本地登录账号和密码；把上报 curl 示例中的 URL 换成本地地址、密钥换成本地密钥即可测试。
 
 - 本地 D1 由 Wrangler 模拟，保存在 `.wrangler/`；不会向线上数据库写入。只运行本地开发时可以保留全零 Database ID。
 - `.dev.vars`、`.wrangler/`、`node_modules/` 和 `dist/` 都已忽略，不会提交到 GitHub。
-- `npm test` 使用 Miniflare 的 Worker/D1 运行时与独立临时数据库验证接口、鉴权、校验、排序、保留 5 份、并发接收、事务回滚及页面输出。
+- `npm test` 使用 Miniflare 的 Worker/D1 运行时与独立临时数据库验证登录、会话过期/篡改、退出、读取权限，以及上报鉴权、校验、排序、保留 5 份、并发接收、事务回滚及页面输出。
 - `npm run build` 执行语法检查和 Wrangler dry-run 打包，不向 Cloudflare 发布。
 - GitHub Actions 在 push / pull request 时执行测试与 dry-run 构建。
 
@@ -272,15 +313,18 @@ npx wrangler d1 create myreport-db
 ```bash
 npm run deploy
 npx wrangler secret put API_KEY
+npx wrangler secret put LOGIN_USERNAME
+npx wrangler secret put LOGIN_PASSWORD
 ```
 
-按提示输入密钥。`wrangler secret put` 会创建并发布带有该密钥的新版本。
+按提示分别输入上报密钥、登录账号和登录密码。`wrangler secret put` 会创建并发布带有该变量的新版本。
 
 ## 实现说明
 
 ```text
 src/index.js                          Worker 路由、验证、D1 读写与排序
 src/page.js                           中文报告页面与响应式样式
+src/auth.js                           登录凭据验证与签名 Cookie 会话
 migrations/0001_create_reports.sql     D1 表结构与索引
 test/worker.test.js                    Worker / D1 集成测试
 wrangler.jsonc                        Worker 和 D1 绑定配置
@@ -289,5 +333,7 @@ wrangler.jsonc                        Worker 和 D1 绑定配置
 ```
 
 `accounts.email` 是主键，`reports.account_email` 外键关联账号。报告的自增 `id` 表示数据库接收顺序；使用 `(account_email, id DESC)` 索引查找最近 5 份。每次 POST 将创建账号、插入报告、删除第 6 份及更早的报告放在同一个 D1 `batch()` 事务中，避免并发写入后超出 5 份，也避免出错时只完成部分步骤。
+
+登录凭据仅从 Worker 环境变量读取，不写入 D1。会话采用 Web Crypto 的 HMAC-SHA-256 签名，包含有效期和随机值，签名密钥与当前站点、登录账号和密码绑定；服务端每次读取报告都校验签名与有效期。登录与退出表单校验请求来源，登录后的跳转仅允许返回本站报告页。
 
 配置与行为可参阅 Cloudflare 官方文档：[Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[D1 入门与绑定](https://developers.cloudflare.com/d1/get-started/)、[D1 batch 事务](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[D1 迁移命令](https://developers.cloudflare.com/workers/wrangler/commands/d1/#d1-migrations-apply)、[Worker Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。
