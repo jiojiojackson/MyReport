@@ -60,7 +60,8 @@ const STYLES = `
   tbody td.latest-points { font-weight:650; color:var(--accent); font-size:15px; }
   .points-value { display:inline-flex; align-items:baseline; gap:5px; max-width:100%; }
   .points-number { min-width:0; }
-  .points-increase { flex-shrink:0; color:#2c865e; font-size:.8em; font-weight:700; line-height:1; }
+  .points-increase { display:inline-flex; align-items:baseline; gap:3px; flex-shrink:0; max-width:100%; color:#2c865e; font-size:.8em; font-weight:700; line-height:1.3; }
+  .points-delta { min-width:0; font-size:.8em; font-weight:600; overflow-wrap:anywhere; }
   tbody td.date { color:#7b8580; font-size:11px; }
   tbody td.missing { color:#b5beb8; }
   .account { display:flex; gap:10px; align-items:center; }
@@ -80,6 +81,7 @@ const STYLES = `
   .card-latest dt, .history-row dt { color:var(--muted); font-size:11px; line-height:1.6; margin:0 0 7px; }
   .card-latest dd, .history-row dd { margin:0; overflow-wrap:anywhere; }
   .card-points { color:var(--accent); font-size:22px; font-weight:650; line-height:1.3; }
+  .card-points .points-value { flex-wrap:wrap; row-gap:3px; }
   .card-latest-wide .card-points { font-size:20px; }
   .card-time { font-size:12px; line-height:1.8; }
   .card-history { border-top:1px solid var(--line); }
@@ -189,12 +191,25 @@ function shell(content, { authenticated = false, title = "账户积分报告 · 
 </html>`;
 }
 
-function pointsIncreased(reports) {
-  return reports.length > 1 && reports[0].total_points > reports[1].total_points;
+function pointsIncrease(reports) {
+  if (reports.length < 2 || reports[0].total_points <= reports[1].total_points) return null;
+
+  // Subtract decimal values without introducing floating-point tails in the UI.
+  const values = reports.slice(0, 2).map(({ total_points }) => {
+    const [coefficient, exponent = "0"] = String(total_points).split("e");
+    const [integer, fraction = ""] = coefficient.split(".");
+    return { digits: BigInt(integer + fraction), scale: fraction.length - Number(exponent) };
+  });
+  const scale = Math.max(0, ...values.map((value) => value.scale));
+  const [latest, previous] = values.map((value) => value.digits * 10n ** BigInt(scale - value.scale));
+  const digits = (latest - previous).toString().padStart(scale + 1, "0");
+  return scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, "") : digits;
 }
 
 function latestPoints(reports) {
-  return `<span class="points-value"><span class="points-number">${escapeHtml(reports[0].total_points)}</span>${pointsIncreased(reports) ? '<span class="points-increase" role="img" aria-label="较前一次积分增加" title="较前一次积分增加">↑</span>' : ""}</span>`;
+  const increase = pointsIncrease(reports);
+  const label = increase === null ? "" : escapeHtml(`较前一次积分增加 ${increase}`);
+  return `<span class="points-value"><span class="points-number">${escapeHtml(reports[0].total_points)}</span>${increase === null ? "" : `<span class="points-increase" role="img" aria-label="${label}" title="${label}"><span aria-hidden="true">↑</span><span class="points-delta" aria-hidden="true">+${escapeHtml(increase)}</span></span>`}</span>`;
 }
 
 function reportCells(reports) {
@@ -222,7 +237,9 @@ function reportTime(value) {
 
 function mobileAccount(account, returnTo, manage) {
   const [latest, ...history] = account.reports;
-  const widePoints = String(latest.total_points).length > (pointsIncreased(account.reports) ? 5 : 10);
+  const increase = pointsIncrease(account.reports);
+  const pointsLength = String(latest.total_points).length;
+  const widePoints = pointsLength > 10 || (increase !== null && pointsLength + increase.length > 5);
   return `<article class="account-card" role="listitem">
     <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><h3 class="card-email">${escapeHtml(account.email)}</h3></header>
     <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
