@@ -11,6 +11,7 @@
 - 表格每行代表一个邮箱，按该邮箱**最后收到的一份报告中的 `report_time` 降序**排列；时间相同时按邮箱升序。
 - `report_time` 按原值保存、显示，不做时区转换。所有上报端应约定使用同一时区，例如北京时间。
 - 不足 5 份时，空缺位置显示 `—`。
+- 支持登录后删除指定邮箱账号及其全部报告，确认后同步删除 D1 数据并刷新页面统计。
 
 完整的 11 列依次是：
 
@@ -26,7 +27,7 @@
 
 ## 网页登录认证
 
-- 在 Worker 运行时环境变量中设置 **`LOGIN_USERNAME`**（登录账号）和 **`LOGIN_PASSWORD`**（登录密码）。这是一个共享的报告查看账号，与上报消息里的账户邮箱无关。
+- 在 Worker 运行时环境变量中设置 **`LOGIN_USERNAME`**（登录账号）和 **`LOGIN_PASSWORD`**（登录密码）。这是一个共享的报告访问账号，可查看报告和删除邮箱账号，与上报消息里的账户邮箱无关。
 - 打开 `/` 会自动进入 `/login`。输入账号和密码后即可查看报告；此前的邮箱搜索条件会保留。
 - 账号和密码按原值匹配，区分大小写。未配置任一变量，或变量为空、全为空白时，报告页面和读取接口返回 `503`，不会开放匿名访问。
 - 登录状态保留 **12 小时**，到期后需要重新登录。报告页右上角可点击“退出登录”。
@@ -35,6 +36,19 @@
 - **POST 上报继续只验证 `API_KEY`**，不要求网页登录；网页登录状态也不能替代上报密钥。
 
 已有部署升级时，在该 Worker 的 **Settings → Variables and Secrets** 添加 `LOGIN_USERNAME` 和 `LOGIN_PASSWORD` 并保存部署即可，不需要修改 D1 表结构。具体配置步骤如下。
+
+## 删除邮箱账号及全部记录
+
+1. 登录积分报告页面，在目标邮箱下点击 **“删除全部记录”**。
+2. 确认页会显示完整邮箱和当前保留的报告数量；点击 **“取消”** 可返回报告，数据保持不变。
+3. 点击 **“确认删除全部记录”**，Worker 会从 D1 中删除该邮箱的账号记录及其关联的全部报告。完成后返回报告页，显示删除成功，表格、账号数量和报告数量同步更新。邮箱搜索条件会保留。
+
+- 删除仅影响所选邮箱，不影响其他账号；操作不可撤销。
+- 删除要求有效的网页登录状态和同源确认表单，上报用的 API-Key 不能代替登录来执行删除。
+- 打开或刷新确认页不会删除数据。账号已不存在时返回 `404`；数据库删除失败时整体回滚，账号和报告共同保留。
+- 如果在确认页打开后又收到该邮箱的新报告，确认删除时会一并删除当时数据库中的全部报告。
+- 删除后，同一邮箱再次通过 POST 上报时，会作为新账号重新建立历史记录；如果有定时上报脚本，后续上报仍会创建该邮箱。
+- 使用现有的 D1 外键级联删除，不需要新增环境变量或执行额外的数据库迁移。更新并部署代码后即可使用。
 
 ## 部署：Cloudflare 连接 GitHub
 
@@ -295,7 +309,7 @@ npm run dev
 
 - 本地 D1 由 Wrangler 模拟，保存在 `.wrangler/`；不会向线上数据库写入。只运行本地开发时可以保留全零 Database ID。
 - `.dev.vars`、`.wrangler/`、`node_modules/` 和 `dist/` 都已忽略，不会提交到 GitHub。
-- `npm test` 使用 Miniflare 的 Worker/D1 运行时与独立临时数据库验证登录、会话过期/篡改、退出、读取权限，以及上报鉴权、校验、排序、保留 5 份、并发接收、事务回滚及页面输出。
+- `npm test` 使用 Miniflare 的 Worker/D1 运行时与独立临时数据库验证登录、会话过期/篡改、退出、读取与删除权限，以及上报鉴权、校验、排序、保留 5 份、并发接收、级联删除、事务回滚及页面输出。
 - `npm run build` 执行语法检查和 Wrangler dry-run 打包，不向 Cloudflare 发布。
 - GitHub Actions 在 push / pull request 时执行测试与 dry-run 构建。
 
@@ -335,5 +349,7 @@ wrangler.jsonc                        Worker 和 D1 绑定配置
 `accounts.email` 是主键，`reports.account_email` 外键关联账号。报告的自增 `id` 表示数据库接收顺序；使用 `(account_email, id DESC)` 索引查找最近 5 份。每次 POST 将创建账号、插入报告、删除第 6 份及更早的报告放在同一个 D1 `batch()` 事务中，避免并发写入后超出 5 份，也避免出错时只完成部分步骤。
 
 登录凭据仅从 Worker 环境变量读取，不写入 D1。会话采用 Web Crypto 的 HMAC-SHA-256 签名，包含有效期和随机值，签名密钥与当前站点、登录账号和密码绑定；服务端每次读取报告都校验签名与有效期。登录与退出表单校验请求来源，登录后的跳转仅允许返回本站报告页。
+
+删除入口为 `GET /accounts/delete?email=...`（仅展示确认），执行删除使用 `POST /accounts/delete` 的同源确认表单。删除前验证登录 Cookie、请求来源、确认字段和邮箱；通过绑定参数执行单条 `DELETE FROM accounts WHERE email = ?`，由 `ON DELETE CASCADE` 原子删除该账号的全部报告。
 
 配置与行为可参阅 Cloudflare 官方文档：[Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[D1 入门与绑定](https://developers.cloudflare.com/d1/get-started/)、[D1 batch 事务](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[D1 迁移命令](https://developers.cloudflare.com/workers/wrangler/commands/d1/#d1-migrations-apply)、[Worker Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。

@@ -58,6 +58,10 @@ const STYLES = `
   .account { display:flex; gap:10px; align-items:center; }
   .avatar { background:#f0f3ed; color:#718268; width:30px; height:30px; border:1px solid #e7ece3; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
   .email { max-width:240px; overflow:hidden; text-overflow:ellipsis; color:#35463d; font-weight:500; }
+  .account-details { display:grid; gap:6px; min-width:0; }
+  .delete-link { justify-self:start; font-size:10px; color:#a15c50; }
+  .delete-link:hover { color:#843d33; text-decoration:underline; }
+  .notice { margin:0 0 24px; padding:13px 16px; border:1px solid #d5e5da; border-radius:7px; background:#edf5ef; color:var(--accent); line-height:1.8; }
   .empty { text-align:center; padding:75px 20px 82px; color:var(--muted); white-space:normal; }
   .empty .empty-icon { font-size:25px; color:#a2b5a8; margin-bottom:14px; }
   .empty h3 { font-size:15px; color:#44534a; margin:0 0 10px; font-weight:500; }
@@ -77,6 +81,14 @@ const STYLES = `
   .login-form .login-submit:hover { background:#205746; }
   .login-error { margin:22px 0 0; padding:11px 13px; border:1px solid #f0d6d2; border-radius:6px; background:#fff7f5; color:#9b4d40; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
   .login-note { margin:22px 0 0; color:var(--muted); text-align:center; font-size:11px; line-height:1.8; }
+  .confirmation-card { max-width:500px; }
+  .confirmation-card h1 { font-size:24px; }
+  .delete-target { margin:24px 0 16px; padding:14px; border:1px solid var(--line); border-radius:6px; background:#f8faf8; font-weight:600; overflow-wrap:anywhere; }
+  .confirmation-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:26px; }
+  .confirmation-actions form { width:auto; }
+  .confirmation-actions .refresh { margin:0; }
+  .delete-button { padding:11px 16px; background:#a64d40; color:#fff; border:1px solid #a64d40; font-size:13px; }
+  .delete-button:hover { background:#8d3e33; border-color:#8d3e33; }
   @media (min-width:1900px) { table { min-width:100%; } }
   @media (max-width:700px) {
     .topbar { height:64px; padding:0 20px; }
@@ -143,7 +155,7 @@ function reportCells(reports) {
   }).join("");
 }
 
-export function renderPage(accounts, query = "") {
+export function renderPage(accounts, query = "", { deleted = false } = {}) {
   const filtered = accounts.filter((account) => account.email.includes(query.toLowerCase()));
   const retained = accounts.reduce((total, account) => total + account.reports.length, 0);
   const latest = accounts[0]?.reports[0]?.report_time ?? "暂无报告";
@@ -152,7 +164,7 @@ export function renderPage(accounts, query = "") {
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
   const rows = filtered.map((account) => `<tr>
-    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span></span></th>
+    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span><a class="delete-link" href="/accounts/delete?email=${encodeURIComponent(account.email)}&amp;next=${encodeURIComponent(refreshUrl)}" aria-label="删除 ${escapeHtml(account.email)} 的全部记录">删除全部记录</a></span></span></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
   const empty = `<tr><td colspan="11" class="empty"><div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p></td></tr>`;
@@ -162,6 +174,7 @@ export function renderPage(accounts, query = "") {
       <div><p class="eyebrow">ACCOUNT OVERVIEW</p><h1>账户积分报告</h1><p class="description">每一次上报，都有迹可循。查看各账号的最新积分与最近 5 次记录。</p></div>
       <a class="refresh" href="${escapeHtml(refreshUrl)}">${refreshIcon}刷新报告</a>
     </div>
+    ${deleted ? '<p class="notice" role="status">账号及全部报告已删除。</p>' : ""}
     <dl class="stats" aria-label="报告概览">
       <div class="stat"><dt>已收录账号</dt><dd>${accounts.length}<small>个</small></dd></div>
       <div class="stat"><dt>已保留报告</dt><dd>${retained}<small>份</small></dd></div>
@@ -190,6 +203,26 @@ export function renderPage(accounts, query = "") {
 
 export function renderUnavailablePage() {
   return shell(`<section class="report unavailable"><p class="eyebrow">MYREPORT</p><h1>报告暂时无法加载</h1><p>请稍后重试。管理员可检查 D1 数据库绑定与数据库迁移是否已完成。</p><a class="refresh" href="/">${refreshIcon}重新加载</a></section>`);
+}
+
+export function renderDeletePage({ email = "", reportCount = 0, returnTo = "/", error = "" } = {}) {
+  return shell(`<section class="login-card confirmation-card" aria-labelledby="delete-title">
+    <p class="eyebrow">ACCOUNT MANAGEMENT</p>
+    <h1 id="delete-title">${error ? "无法删除账号记录" : "删除账号及全部记录？"}</h1>
+    ${email ? `<p class="delete-target">${escapeHtml(email)}</p>` : ""}
+    ${error
+      ? `<p class="login-error" role="alert">${escapeHtml(error)}</p>`
+      : `<p class="description">该邮箱当前保存了 <strong>${escapeHtml(reportCount)}</strong> 份报告。确认后，将从数据库删除该账号及其全部报告，操作无法撤销。</p>`}
+    <div class="confirmation-actions">
+      <a class="refresh" href="${escapeHtml(returnTo)}">${error ? "返回报告" : "取消"}</a>
+      ${error ? "" : `<form action="/accounts/delete" method="post">
+        <input type="hidden" name="email" value="${escapeHtml(email)}">
+        <input type="hidden" name="next" value="${escapeHtml(returnTo)}">
+        <input type="hidden" name="confirm" value="delete">
+        <button class="delete-button" type="submit">确认删除全部记录</button>
+      </form>`}
+    </div>
+  </section>`, { authenticated: true, title: "删除账号记录 · MyReport" });
 }
 
 export function renderLoginPage({ error = "", username = "", returnTo = "/", configured = true } = {}) {

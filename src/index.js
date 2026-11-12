@@ -1,4 +1,4 @@
-import { renderLoginPage, renderPage, renderUnavailablePage } from "./page.js";
+import { renderDeletePage, renderLoginPage, renderPage, renderUnavailablePage } from "./page.js";
 import {
   clearSessionCookie, createSessionCookie, credentialsMatch,
   isAuthenticated, loginConfigured, safeReturnTo, secretMatches,
@@ -111,14 +111,19 @@ function validReportTime(value) {
   return day >= 1 && day <= days[month - 1];
 }
 
-function validateReport(body) {
-  if (typeof body.email !== "string") {
+function normalizeEmail(value) {
+  if (typeof value !== "string") {
     throw new HttpError(400, "email 必须是有效的账户邮箱。");
   }
-  const email = body.email.trim().toLowerCase();
+  const email = value.trim().toLowerCase();
   if (email.length > 254 || !/^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+\.[^\s@\u0000-\u001f\u007f]+$/u.test(email)) {
     throw new HttpError(400, "email 必须是有效的账户邮箱，长度不能超过 254 个字符。");
   }
+  return email;
+}
+
+function validateReport(body) {
+  const email = normalizeEmail(body.email);
   if (
     typeof body.total_points !== "number" ||
     !Number.isFinite(body.total_points) ||
@@ -191,12 +196,21 @@ async function listReports(env) {
   );
 }
 
-function checkFormOrigin(request) {
+function checkFormOrigin(request, requireOrigin = false) {
   const origin = request.headers.get("origin");
-  if ((origin !== null && origin !== new URL(request.url).origin) ||
+  if ((requireOrigin && origin === null) ||
+      (origin !== null && origin !== new URL(request.url).origin) ||
       request.headers.get("sec-fetch-site") === "cross-site") {
-    throw new HttpError(403, "请在本站页面提交登录或退出请求。");
+    throw new HttpError(403, "请在本站页面提交此操作。");
   }
+}
+
+async function readForm(request) {
+  const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (type !== "application/x-www-form-urlencoded") {
+    throw new HttpError(415, "请求必须使用表单编码。");
+  }
+  return new URLSearchParams(await readBodyText(request));
 }
 
 async function handleLogin(request, env, url) {
@@ -208,11 +222,7 @@ async function handleLogin(request, env, url) {
   }
 
   checkFormOrigin(request);
-  const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-  if (type !== "application/x-www-form-urlencoded") {
-    throw new HttpError(415, "登录请求必须使用表单编码。");
-  }
-  const form = new URLSearchParams(await readBodyText(request));
+  const form = await readForm(request);
   const returnTo = safeReturnTo(form.get("next"));
   const username = form.get("username") ?? "";
   if (!(await credentialsMatch(username, form.get("password"), env))) {
@@ -221,13 +231,45 @@ async function handleLogin(request, env, url) {
   return redirect(returnTo, 303, { "Set-Cookie": await createSessionCookie(request, env) });
 }
 
+async function handleAccountDelete(request, env, url) {
+  if (request.method === "POST") {
+    // 删除仅接受登录后的同源表单；必须经过确认操作。
+    checkFormOrigin(request, true);
+    const form = await readForm(request);
+    if (form.get("confirm") !== "delete" || form.getAll("email").length !== 1) {
+      throw new HttpError(400, "请在确认页面选择要删除的邮箱账号。");
+    }
+    const email = normalizeEmail(form.get("email"));
+    const returnTo = safeReturnTo(form.get("next"));
+    // 外键 ON DELETE CASCADE 在同一条 SQL 中原子删除账号及其全部报告。
+    const result = await requireDatabase(env).prepare("DELETE FROM accounts WHERE email = ?")
+      .bind(email).run();
+    if (!result.meta.changes) {
+      throw new HttpError(404, "账号不存在或已被删除，请刷新报告后重试。");
+    }
+    const destination = new URL(returnTo, url.origin);
+    destination.searchParams.set("deleted", "1");
+    return redirect(destination.pathname + destination.search, 303);
+  }
+
+  const email = normalizeEmail(url.searchParams.get("email"));
+  const returnTo = safeReturnTo(url.searchParams.get("next"));
+  const account = await requireDatabase(env).prepare(`
+    SELECT email, (SELECT COUNT(*) FROM reports WHERE account_email = accounts.email) AS report_count
+    FROM accounts WHERE email = ?
+  `).bind(email).first();
+  if (!account) throw new HttpError(404, "账号不存在或已被删除，请刷新报告后重试。");
+  return html(renderDeletePage({ email: account.email, reportCount: account.report_count, returnTo }));
+}
+
 async function handleRequest(request, env) {
   const url = new URL(request.url);
   const isPage = url.pathname === "/";
   const isApi = url.pathname === "/api/reports";
   const isLogin = url.pathname === "/login";
   const isLogout = url.pathname === "/logout";
-  if (!isPage && !isApi && !isLogin && !isLogout) {
+  const isDelete = url.pathname === "/accounts/delete";
+  if (!isPage && !isApi && !isLogin && !isLogout && !isDelete) {
     return json({ success: false, error: "接口不存在。" }, 404);
   }
   const allowed = isLogout ? ["POST"] : ["GET", "HEAD", "POST"];
@@ -242,20 +284,24 @@ async function handleRequest(request, env) {
       return redirect("/login", 303, { "Set-Cookie": clearSessionCookie(request) });
     }
     // 自动上报只验证 API_KEY，不依赖网页登录状态或登录环境变量。
-    if (request.method === "POST") return await receiveReport(request, env);
+    if (request.method === "POST" && (isPage || isApi)) return await receiveReport(request, env);
     if (!loginConfigured(env)) {
-      if (isPage) return html(renderLoginPage({ configured: false }), 503);
+      if (isPage || isDelete) return html(renderLoginPage({ configured: false }), 503);
       throw new HttpError(503, "请管理员配置 LOGIN_USERNAME 和 LOGIN_PASSWORD。");
     }
     if (!(await isAuthenticated(request, env))) {
       if (isApi) throw new HttpError(401, "请先登录后再查看报告。");
-      const returnTo = safeReturnTo(url.pathname + url.search);
-      return redirect(returnTo === "/" ? "/login" : `/login?next=${encodeURIComponent(returnTo)}`);
+      const returnTo = safeReturnTo(isDelete ? url.searchParams.get("next") : url.pathname + url.search);
+      return redirect(
+        returnTo === "/" ? "/login" : `/login?next=${encodeURIComponent(returnTo)}`,
+        request.method === "POST" ? 303 : 302,
+      );
     }
+    if (isDelete) return await handleAccountDelete(request, env, url);
     const accounts = await listReports(env);
     if (isApi) return json({ success: true, data: accounts });
     const query = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
-    return html(renderPage(accounts, query));
+    return html(renderPage(accounts, query, { deleted: url.searchParams.get("deleted") === "1" }));
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError
@@ -265,6 +311,9 @@ async function handleRequest(request, env) {
       console.error("Worker request failed:", error instanceof Error ? error.message : "Unknown error");
     }
     if (isLogin) return html(renderLoginPage({ error: message, configured: loginConfigured(env) }), status);
+    if (isDelete) {
+      return html(renderDeletePage({ error: message, returnTo: safeReturnTo(url.searchParams.get("next")) }), status);
+    }
     if (isPage && ["GET", "HEAD"].includes(request.method)) {
       return html(renderUnavailablePage(), status);
     }

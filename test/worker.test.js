@@ -71,6 +71,14 @@ function login(values = {}, headers = {}) {
   });
 }
 
+function deleteAccount(values = {}, headers = {}) {
+  return read("/accounts/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, ...headers },
+    body: new URLSearchParams({ email: example.email, confirm: "delete", next: "/", ...values }).toString(),
+  });
+}
+
 async function data() {
   const response = await read("/api/reports");
   assert.equal(response.status, 200);
@@ -557,4 +565,206 @@ test("local HTTP development uses a host-only HttpOnly cookie", async () => {
   assert.ok(cookie.includes("HttpOnly"));
   assert.ok(!cookie.includes("Secure"));
   assert.ok(!cookie.includes("Domain="));
+});
+
+test("report rows include a delete entry while retaining all eleven report columns", async () => {
+  await post();
+  const html = await (await read("/?q=alice")).text();
+  assert.equal((html.match(/scope="col"/g) ?? []).length, 11);
+  assert.ok(html.includes("删除全部记录"));
+  assert.ok(html.includes("/accounts/delete?email=alice%40example.com&amp;next=%2F%3Fq%3Dalice"));
+});
+
+test("GET and HEAD deletion confirmation never change database records", async () => {
+  for (let i = 0; i < 7; i++) await post({ ...example, total_points: i });
+  const before = await data();
+  const response = await read("/accounts/delete?email=alice%40example.com&next=%2F%3Fq%3Dalice");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.ok(html.includes("删除账号及全部记录？"));
+  assert.ok(html.includes(example.email));
+  assert.ok(html.includes("<strong>5</strong> 份报告"));
+  assert.ok(html.includes('action="/accounts/delete" method="post"'));
+  assert.ok(html.includes('href="/?q=alice"'));
+  assert.ok(html.includes('name="next" value="/?q=alice"'));
+  const head = await read("/accounts/delete?email=alice%40example.com", { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  await read("/?q=alice");
+  assert.deepEqual(await data(), before);
+});
+
+test("confirmed deletion removes the account and all its D1 records, preserving other emails", async () => {
+  for (let i = 0; i < 7; i++) await post({ ...example, total_points: i });
+  await post({ ...example, email: "bob@example.com", total_points: 50 });
+  await post({ ...example, email: "bob@example.com", total_points: 60 });
+  const before = (await data()).find((account) => account.email === "bob@example.com");
+  const response = await deleteAccount({ next: "/?q=alice" });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/?q=alice&deleted=1");
+  assert.equal(await db.prepare("SELECT email FROM accounts WHERE email = ?").bind(example.email).first(), null);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM reports WHERE account_email = ?").bind(example.email).first()).total, 0);
+  assert.deepEqual(await data(), [before]);
+  const html = await (await read(response.headers.get("location"))).text();
+  assert.ok(html.includes("账号及全部报告已删除。"));
+  assert.ok(!html.includes('title="alice@example.com"'));
+});
+
+test("deleting the final account updates empty state and aggregate counts", async () => {
+  await post();
+  const response = await deleteAccount();
+  assert.equal(response.status, 303);
+  await assertNoWrites();
+  assert.deepEqual(await data(), []);
+  const html = await (await read(response.headers.get("location"))).text();
+  assert.ok(html.includes("等待第一份报告"));
+  assert.ok(html.includes("账号及全部报告已删除。"));
+  assert.ok(html.includes('<dd>0<small>个</small>'));
+  assert.ok(html.includes('<dd>0<small>份</small>'));
+});
+
+test("deletion requires a valid webpage session even when a correct API key is supplied", async () => {
+  await post();
+  const confirmation = await visit("/accounts/delete?email=alice%40example.com");
+  assert.equal(confirmation.status, 302);
+  assert.ok(!(await confirmation.text()).includes(example.email));
+  const expired = (await createSessionCookie(new Request(ORIGIN), LOGIN_ENV, Date.now() - 13 * 3600 * 1000)).split(";")[0];
+  for (const cookie of ["", "__Host-myreport_session=invalid", expired]) {
+    const response = await visit("/accounts/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, "api-key": API_KEY, Cookie: cookie },
+      body: new URLSearchParams({ email: example.email, confirm: "delete" }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/login");
+  }
+  assert.equal((await data())[0].reports.length, 1);
+});
+
+test("missing login configuration cannot expose confirmation or authorize deletion", async () => {
+  await post();
+  for (const method of ["GET", "POST"]) {
+    const request = new Request(ORIGIN + "/accounts/delete?email=alice%40example.com", {
+      method,
+      headers: { Cookie: sessionCookie, Origin: ORIGIN, "Content-Type": "application/x-www-form-urlencoded" },
+      ...(method === "POST" ? { body: new URLSearchParams({ email: example.email, confirm: "delete" }) } : {}),
+    });
+    const response = await worker.fetch(request, { DB: db, API_KEY });
+    assert.equal(response.status, 503);
+    assert.ok(!(await response.text()).includes(example.email));
+  }
+  assert.equal((await data()).length, 1);
+});
+
+test("deletion rejects missing or cross-site origins without changing D1", async () => {
+  await post();
+  for (const headers of [{}, { Origin: "https://evil.example" }, { Origin: "null" }, { Origin: ORIGIN, "Sec-Fetch-Site": "cross-site" }]) {
+    const response = await read("/accounts/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers },
+      body: new URLSearchParams({ email: example.email, confirm: "delete" }),
+    });
+    assert.equal(response.status, 403);
+  }
+  assert.equal((await data()).length, 1);
+});
+
+test("deletion requires explicit confirmation and one valid email", async () => {
+  await post();
+  for (const body of [
+    "email=alice%40example.com", "email=alice%40example.com&confirm=cancel", "confirm=delete",
+    "email=alice%40example.com&email=bob%40example.com&confirm=delete", "email=invalid&confirm=delete",
+  ]) {
+    const response = await read("/accounts/delete", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN }, body,
+    });
+    assert.equal(response.status, 400);
+  }
+  assert.equal((await data()).length, 1);
+});
+
+test("missing or already deleted accounts return 404 and preserve remaining data", async () => {
+  await post();
+  assert.equal((await read("/accounts/delete?email=missing%40example.com")).status, 404);
+  assert.equal((await deleteAccount({ email: "missing@example.com" })).status, 404);
+  assert.equal((await data()).length, 1);
+  assert.equal((await deleteAccount()).status, 303);
+  assert.equal((await deleteAccount()).status, 404);
+  await assertNoWrites();
+});
+
+test("a cascade failure rolls back both the account deletion and all report deletions", async () => {
+  for (let i = 1; i <= 3; i++) await post({ ...example, total_points: i });
+  await post({ ...example, email: "bob@example.com" });
+  const before = await data();
+  await db.prepare(`CREATE TRIGGER test_fail_account_delete BEFORE DELETE ON reports
+    WHEN OLD.account_email = 'alice@example.com'
+    BEGIN SELECT RAISE(ABORT, 'forced account deletion failure'); END`).run();
+  try {
+    const response = await deleteAccount();
+    assert.equal(response.status, 500);
+    const html = await response.text();
+    assert.ok(html.includes("无法删除账号记录"));
+    assert.ok(!html.includes("forced account deletion failure"));
+    assert.deepEqual(await data(), before);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM accounts").first()).total, 2);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM reports").first()).total, 4);
+  } finally {
+    await db.prepare("DROP TRIGGER test_fail_account_delete").run();
+  }
+});
+
+test("deletion binds quoted email values and escapes confirmation page content", async () => {
+  const email = "o'hara@example.com";
+  await post({ ...example, email });
+  await post({ ...example, email: "bob@example.com" });
+  const confirmation = await read("/accounts/delete?email=" + encodeURIComponent(email));
+  assert.equal(confirmation.status, 200);
+  assert.ok((await confirmation.text()).includes("o&#39;hara@example.com"));
+  assert.equal((await deleteAccount({ email: " O'HARA@EXAMPLE.COM " })).status, 303);
+  assert.equal((await data())[0].email, "bob@example.com");
+  const markup = "<svg/onload=alert(1)>@example.com";
+  await post({ ...example, email: markup });
+  const html = await (await read("/accounts/delete?email=" + encodeURIComponent(markup))).text();
+  assert.ok(!html.includes("<svg/onload=alert(1)>"));
+  assert.ok(html.includes("&lt;svg/onload=alert(1)&gt;@example.com"));
+});
+
+test("deletion form validation and body limits do not remove data", async () => {
+  await post();
+  assert.equal((await deleteAccount({}, { "Content-Type": "application/json" })).status, 415);
+  assert.equal((await deleteAccount({ padding: "x".repeat(17000) })).status, 413);
+  const unsupported = await read("/accounts/delete", { method: "DELETE" });
+  assert.equal(unsupported.status, 405);
+  assert.equal(unsupported.headers.get("allow"), "GET, HEAD, POST");
+  assert.equal((await data()).length, 1);
+});
+
+test("deletion and cancellation return URLs cannot redirect away from the report page", async () => {
+  await post();
+  const html = await (await read("/accounts/delete?email=alice%40example.com&next=" + encodeURIComponent("https://evil.example"))).text();
+  assert.ok(!html.includes('href="https://evil.example"'));
+  assert.ok(html.includes('name="next" value="/"'));
+  const response = await deleteAccount({ next: "//evil.example" });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/?deleted=1");
+});
+
+test("deletion includes reports received after the confirmation page was opened", async () => {
+  await post();
+  assert.equal((await read("/accounts/delete?email=alice%40example.com")).status, 200);
+  await post({ ...example, total_points: 2000 });
+  assert.equal((await data())[0].reports.length, 2);
+  assert.equal((await deleteAccount()).status, 303);
+  await assertNoWrites();
+});
+
+test("a later upload recreates the deleted email with a fresh history", async () => {
+  await post();
+  await post({ ...example, total_points: 2000 });
+  assert.equal((await deleteAccount()).status, 303);
+  await assertNoWrites();
+  await post({ ...example, total_points: 9999 });
+  const [account] = await data();
+  assert.deepEqual(account.reports, [{ total_points: 9999, report_time: example.report_time }]);
 });
