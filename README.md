@@ -65,6 +65,10 @@
      "compatibility_date": "2026-07-01",
      "workers_dev": true,
      "keep_vars": true,
+     "assets": {
+       "directory": "./public",
+       "run_worker_first": ["/*", "!/favicon.svg", "!/favicon.ico", "!/apple-touch-icon.png"]
+     },
      "d1_databases": [
        {
          "binding": "DB",
@@ -339,6 +343,7 @@ npx wrangler secret put LOGIN_PASSWORD
 src/index.js                          Worker 路由、验证、D1 读写与排序
 src/page.js                           中文报告页面与响应式样式
 src/auth.js                           登录凭据验证与签名 Cookie 会话
+public/                               标签页 SVG / ICO 图标及手机收藏图标
 migrations/0001_create_reports.sql     D1 表结构与索引
 test/worker.test.js                    Worker / D1 集成测试
 wrangler.jsonc                        Worker 和 D1 绑定配置
@@ -351,5 +356,7 @@ wrangler.jsonc                        Worker 和 D1 绑定配置
 登录凭据仅从 Worker 环境变量读取，不写入 D1。会话采用 Web Crypto 的 HMAC-SHA-256 签名，包含有效期和随机值，签名密钥与当前站点、登录账号和密码绑定；服务端每次读取报告都校验签名与有效期。登录与退出表单校验请求来源，登录后的跳转仅允许返回本站报告页。
 
 删除入口为 `GET /accounts/delete?email=...`（仅展示确认），执行删除使用 `POST /accounts/delete` 的同源确认表单。删除前验证登录 Cookie、请求来源、确认字段和邮箱；通过绑定参数执行单条 `DELETE FROM accounts WHERE email = ?`，由 `ON DELETE CASCADE` 原子删除该账号的全部报告。
+
+标签页图标沿用页头的绿色积分图表标识，所有页面共享。`public/favicon.svg` 用于现代浏览器，`favicon.ico` 包含 16px 和 32px 图标，`apple-touch-icon.png` 为 180px 手机收藏图标。Wrangler 自动部署这些静态文件；保留配置中的 `assets` 字段即可，无需额外环境变量。应用页面及接口继续由 Worker 处理。
 
 配置与行为可参阅 Cloudflare 官方文档：[Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[D1 入门与绑定](https://developers.cloudflare.com/d1/get-started/)、[D1 batch 事务](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[D1 迁移命令](https://developers.cloudflare.com/workers/wrangler/commands/d1/#d1-migrations-apply)、[Worker Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。

@@ -16,7 +16,7 @@ const HTML_HEADERS = {
   ...RESPONSE_HEADERS,
   "Content-Type": "text/html; charset=utf-8",
   "Content-Security-Policy":
-    "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
 class HttpError extends Error {

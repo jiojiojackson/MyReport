@@ -134,6 +134,9 @@ function shell(content, { authenticated = false, title = "账户积分报告 · 
   <meta name="color-scheme" content="light">
   <meta name="description" content="账户积分报告，每个账号最近五次上报一目了然。">
   <meta name="robots" content="noindex, noarchive">
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32" type="image/x-icon">
+  <link rel="icon" href="/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
   <title>${escapeHtml(title)}</title>
   <style>${STYLES}</style>
 </head>
