@@ -10,7 +10,7 @@
       "binding": "DB",
       "database_name": "myreport-db",
       // 部署前替换成 Cloudflare D1 控制台中的真实 Database ID。
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "d040b275-9a10-4301-b04e-82e0c4fa2d62",
       "migrations_dir": "migrations"
     }
   ]
