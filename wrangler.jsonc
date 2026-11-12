@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "myreport",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "myreport-db",
+      // 部署前替换成 Cloudflare D1 控制台中的真实 Database ID。
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

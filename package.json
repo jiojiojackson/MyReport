@@ -1,0 +1,23 @@
+{
+  "name": "myreport",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker + D1 账户积分报告",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "node --check src/index.js && node --check src/page.js",
+    "test": "node --test",
+    "build": "npm run check && wrangler deploy --dry-run --outdir dist",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run db:migrate:remote && wrangler deploy"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261110.1-beta",
+    "wrangler": "4.160.1"
+  }
+}
