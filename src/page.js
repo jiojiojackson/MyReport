@@ -1,5 +1,7 @@
+import { formatJapanTime, reportStatus } from "./report-status.js";
+
 const STYLES = `
-  :root { color-scheme: light; --ink:#202c31; --muted:#738087; --line:#e5eae8; --accent:#276756; --paper:#f6f8f6; }
+  :root { color-scheme: light; --ink:#253b33; --muted:#697b70; --line:#e2eae5; --accent:#326e58; --paper:#f4f7f5; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--paper); color:var(--ink); font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; font-size:14px; -webkit-font-smoothing:antialiased; }
   a { color:inherit; text-decoration:none; }
@@ -20,6 +22,9 @@ const STYLES = `
   .heading { display:flex; justify-content:space-between; align-items:center; gap:24px; margin-bottom:32px; }
   h1 { font-size:30px; font-weight:650; letter-spacing:-1px; margin:0 0 12px; }
   .description { margin:0; color:var(--muted); font-size:13px; line-height:1.8; }
+  .report-clock { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:14px 0 0; color:var(--muted); font-size:11px; line-height:1.7; }
+  .timezone { padding:2px 7px; border:1px solid #dce7df; border-radius:5px; background:#eaf1ed; color:var(--accent); font-weight:600; }
+  .report-clock time { font-variant-numeric:tabular-nums; }
   .refresh { display:inline-flex; align-items:center; justify-content:center; gap:9px; padding:11px 16px; border:1px solid #d6dfda; background:#fff; border-radius:7px; font-size:13px; white-space:nowrap; }
   .refresh:hover { background:#edf3ef; border-color:#a9bfb3; }
   .refresh svg { width:15px; height:15px; }
@@ -28,7 +33,7 @@ const STYLES = `
   .manage-button { padding:11px 16px; background:#fff; border-color:#d6dfda; font-size:13px; white-space:nowrap; }
   .manage-button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
   .manage-button[aria-pressed="true"]:hover { background:#205746; }
-  .stats { display:flex; gap:0; margin:0 0 32px; padding:22px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .stats { display:flex; gap:0; margin:0 0 28px; padding:22px 24px; background:#fff; border:1px solid var(--line); border-radius:12px; box-shadow:0 2px 8px #253b3303; }
   .stat { padding:0 38px; border-right:1px solid var(--line); }
   .stat:first-child { padding-left:0; }
   .stat:last-child { border:0; }
@@ -36,7 +41,7 @@ const STYLES = `
   .stat dd { margin:0; font-size:26px; line-height:1.2; font-weight:600; letter-spacing:-.7px; font-variant-numeric:tabular-nums; }
   .stat dd small { margin-left:6px; font-size:12px; font-weight:400; color:var(--muted); letter-spacing:0; }
   .stat dd.date { font-size:17px; padding-top:6px; letter-spacing:0; }
-  .report { background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .report { background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:0 4px 20px #253b3304; }
   .toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 22px; }
   h2 { font-size:15px; font-weight:600; margin:0; display:flex; align-items:center; gap:10px; }
   .count { color:var(--accent); background:#edf4ef; border:1px solid #e3eee6; border-radius:5px; padding:2px 7px; font-size:11px; font-weight:500; }
@@ -48,6 +53,18 @@ const STYLES = `
   button { border:1px solid #dbe4de; border-radius:6px; background:#f2f6f3; font:inherit; font-size:12px; color:var(--accent); padding:8px 12px; cursor:pointer; }
   button:hover { background:#e5eee8; }
   .clear { font-size:12px; color:var(--muted); padding:8px 0 8px 4px; }
+  .status-green { --status-color:#326e53; --status-dot:#529675; --status-bg:#f1f8f3; --status-hover:#e8f3ec; --status-border:#dcebe1; --status-badge:#e2efe6; }
+  .status-yellow { --status-color:#8b681f; --status-dot:#bf9743; --status-bg:#fffbf1; --status-hover:#fcf4df; --status-border:#eee4c8; --status-badge:#f6edcf; }
+  .status-red { --status-color:#9a5d56; --status-dot:#bd8178; --status-bg:#fff5f3; --status-hover:#fbece8; --status-border:#efded9; --status-badge:#f5e5e1; }
+  .status-legend { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:13px 22px; border-top:1px solid var(--line); background:#fbfcfb; }
+  .legend-caption { color:var(--muted); font-size:11px; }
+  .legend-items { display:flex; flex-wrap:wrap; gap:8px; }
+  .legend-item { display:inline-flex; align-items:center; gap:7px; padding:6px 10px; border:1px solid var(--status-border); border-radius:7px; background:var(--status-bg); color:var(--status-color); font-size:11px; line-height:1.4; }
+  .legend-item b { margin-left:4px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .legend-note { margin-left:auto; color:var(--muted); font-size:11px; }
+  .status-dot { display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--status-dot); flex-shrink:0; }
+  .status-badge { display:inline-flex; align-items:center; justify-self:start; gap:5px; padding:3px 7px; border-radius:5px; background:var(--status-badge); color:var(--status-color); font-size:10px; font-weight:500; line-height:1.5; white-space:nowrap; }
+  .account-meta { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
   .table-scroll { overflow-x:auto; scrollbar-color:#c8d6ce #f8faf8; }
   table { border-collapse:separate; border-spacing:0; width:100%; min-width:1560px; font-size:12px; white-space:nowrap; }
   thead th { background:#f8faf8; color:#748079; font-size:11px; font-weight:500; border-top:1px solid var(--line); border-bottom:1px solid var(--line); height:46px; text-align:left; padding:0 20px; }
@@ -57,22 +74,29 @@ const STYLES = `
   tbody td, tbody th { height:72px; border-bottom:1px solid #edf0ed; padding:14px 20px; background:#fff; text-align:left; font-weight:400; font-variant-numeric:tabular-nums; }
   tbody tr:last-child td, tbody tr:last-child th { border-bottom:0; }
   tbody tr:hover td, tbody tr:hover th { background:#f9fbf9; }
+  tbody tr.report-row td, tbody tr.report-row th { background:var(--status-bg); border-bottom-color:var(--status-border); }
+  tbody tr.report-row:hover td, tbody tr.report-row:hover th { background:var(--status-hover); }
+  tbody tr.report-row th { box-shadow:inset 3px 0 var(--status-dot); }
   tbody td.latest-points { font-weight:650; color:var(--accent); font-size:15px; }
+  tbody tr.report-row td.latest-points { color:var(--status-color); }
   .points-value { display:inline-flex; align-items:baseline; gap:5px; max-width:100%; }
   .points-number { min-width:0; }
   .points-increase { display:inline-flex; align-items:baseline; gap:3px; flex-shrink:0; max-width:100%; color:#2c865e; font-size:.8em; font-weight:700; line-height:1.3; }
-  .points-delta { min-width:0; font-size:.8em; font-weight:600; overflow-wrap:anywhere; }
+  .points-delta { min-width:0; font-size:max(11px,.8em); font-weight:600; overflow-wrap:anywhere; }
   tbody td.date { color:#7b8580; font-size:11px; }
   tbody td.missing { color:#b5beb8; }
   .account { display:flex; gap:10px; align-items:center; }
   .avatar { background:#f0f3ed; color:#718268; width:30px; height:30px; border:1px solid #e7ece3; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .report-row .avatar, .account-card .avatar { color:var(--status-color); background:var(--status-badge); border-color:var(--status-border); }
   .email { max-width:240px; overflow:hidden; text-overflow:ellipsis; color:#35463d; font-weight:500; }
   .account-details { display:grid; gap:6px; min-width:0; }
   .delete-link { display:inline-flex; align-items:center; justify-self:start; min-height:30px; padding:5px 8px; border:1px solid #eddad6; border-radius:5px; background:#fff7f5; font-size:11px; color:#a15c50; }
   .delete-link:hover { color:#843d33; text-decoration:underline; }
   .mobile-reports, .mobile-hint { display:none; }
-  .account-card { min-width:0; padding:16px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .account-card { min-width:0; padding:17px; border:1px solid var(--status-border); border-left:3px solid var(--status-dot); border-radius:10px; background:var(--status-bg); box-shadow:0 2px 6px #253b3303; }
   .card-account { display:flex; align-items:center; gap:10px; min-width:0; }
+  .card-heading { min-width:0; display:grid; gap:5px; }
+  .card-account .avatar { align-self:flex-start; margin-top:2px; width:34px; height:34px; border-radius:9px; }
   .card-email { min-width:0; margin:0; font-size:13px; font-weight:600; line-height:1.6; overflow-wrap:anywhere; }
   .card-latest, .history-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr); gap:12px; font-variant-numeric:tabular-nums; }
   .card-latest { margin:18px 0 16px; }
@@ -80,22 +104,22 @@ const STYLES = `
   .card-latest div, .history-row div { min-width:0; }
   .card-latest dt, .history-row dt { color:var(--muted); font-size:11px; line-height:1.6; margin:0 0 7px; }
   .card-latest dd, .history-row dd { margin:0; overflow-wrap:anywhere; }
-  .card-points { color:var(--accent); font-size:22px; font-weight:650; line-height:1.3; }
+  .card-points { color:var(--status-color); font-size:22px; font-weight:650; line-height:1.3; }
   .card-points .points-value { flex-wrap:wrap; row-gap:3px; }
   .card-latest-wide .card-points { font-size:20px; }
   .card-time { font-size:12px; line-height:1.8; }
-  .card-history { border-top:1px solid var(--line); }
+  .card-history { border-top:1px solid var(--status-border); }
   .card-history summary { display:flex; align-items:center; gap:8px; min-height:44px; color:var(--accent); font-size:12px; cursor:pointer; list-style:none; -webkit-tap-highlight-color:rgba(39,103,86,.08); }
   .card-history summary::-webkit-details-marker { display:none; }
   .card-history summary::after { content:""; width:6px; height:6px; margin-left:auto; margin-right:3px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
   .card-history[open] > summary::after { transform:rotate(225deg); }
   .card-history summary:focus-visible { outline:3px solid #70a994; outline-offset:2px; }
   .history-count { color:var(--muted); font-size:11px; }
-  .history-row { margin:0; padding:13px 0; border-top:1px solid #edf0ed; }
+  .history-row { margin:0; padding:13px 0; border-top:1px solid var(--status-border); }
   .history-row dd { font-size:13px; line-height:1.6; }
   .history-row time { font-size:12px; }
-  .card-note { margin:0; padding-top:12px; border-top:1px solid var(--line); font-size:11px; color:var(--muted); }
-  .card-actions { padding-top:12px; border-top:1px solid var(--line); }
+  .card-note { margin:0; padding-top:12px; border-top:1px solid var(--status-border); font-size:11px; color:var(--muted); }
+  .card-actions { padding-top:12px; border-top:1px solid var(--status-border); }
   .card-actions .delete-link { min-height:40px; padding:8px 12px; }
   .notice { margin:0 0 24px; padding:13px 16px; border:1px solid #d5e5da; border-radius:7px; background:#edf5ef; color:var(--accent); line-height:1.8; }
   .empty { text-align:center; padding:75px 20px 82px; color:var(--muted); white-space:normal; }
@@ -138,12 +162,17 @@ const STYLES = `
     h1 { font-size:26px; }
     .description { font-size:12px; }
     .refresh { padding:9px 11px; font-size:12px; }
-    .stats { flex-wrap:wrap; row-gap:24px; padding:20px 0; }
+    .stats { flex-wrap:wrap; row-gap:24px; padding:20px 18px; }
     .stat { padding:0 22px; }
     .stat dd { font-size:23px; }
     .stat:last-child { width:100%; padding:0; }
     .stat:nth-child(2) { border:0; }
     .toolbar { align-items:flex-start; flex-direction:column; padding:18px 16px; }
+    .status-legend { align-items:stretch; flex-direction:column; gap:9px; padding:13px 16px; }
+    .legend-items { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+    .legend-item { gap:5px; padding:7px; font-size:10px; }
+    .legend-item b { margin-left:auto; }
+    .legend-extra, .legend-note { display:none; }
     form { width:100%; }
     .search { flex:1; min-width:0; }
     input { width:100%; min-width:0; }
@@ -232,16 +261,20 @@ function deleteLink(email, returnTo) {
 }
 
 function reportTime(value) {
-  return `<time datetime="${escapeHtml(String(value).replace(" ", "T"))}">${escapeHtml(value)}</time>`;
+  return `<time datetime="${escapeHtml(String(value).replace(" ", "T"))}:00+09:00">${escapeHtml(value)}</time>`;
 }
 
-function mobileAccount(account, returnTo, manage) {
+function statusBadge(status) {
+  return `<span class="status-badge" title="${escapeHtml(status.description)}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(status.label)}</span>`;
+}
+
+function mobileAccount(account, status, returnTo, manage) {
   const [latest, ...history] = account.reports;
   const increase = pointsIncrease(account.reports);
   const pointsLength = String(latest.total_points).length;
   const widePoints = pointsLength > 10 || (increase !== null && pointsLength + increase.length > 5);
-  return `<article class="account-card" role="listitem">
-    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><h3 class="card-email">${escapeHtml(account.email)}</h3></header>
+  return `<article class="account-card status-${status.tone}" role="listitem">
+    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${escapeHtml(account.email)}</h3>${statusBadge(status)}</div></header>
     <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
       <div><dt>最近总积分</dt><dd class="card-points">${latestPoints(account.reports)}</dd></div>
       <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
@@ -256,8 +289,12 @@ function mobileAccount(account, returnTo, manage) {
   </article>`;
 }
 
-export function renderPage(accounts, query = "", { deleted = false, manage = false } = {}) {
+export function renderPage(accounts, query = "", { deleted = false, manage = false, now = Date.now() } = {}) {
   const filtered = accounts.filter((account) => account.email.includes(query.toLowerCase()));
+  const statuses = new Map(accounts.map((account) => [account.email, reportStatus(account.reports, now)]));
+  const statusCounts = { green: 0, yellow: 0, red: 0 };
+  for (const account of filtered) statusCounts[statuses.get(account.email).tone]++;
+  const japanNow = formatJapanTime(now);
   const retained = accounts.reduce((total, account) => total + account.reports.length, 0);
   const latest = accounts[0]?.reports[0]?.report_time ?? "暂无报告";
   const refreshUrl = reportUrl(query, manage);
@@ -265,8 +302,8 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
   const headers = ["账号名称", "最近总积分", "最近报告时间", ...Array.from({ length: 4 }, (_, i) => [
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
-  const rows = filtered.map((account) => `<tr>
-    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span>${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></th>
+  const rows = filtered.map((account) => `<tr class="report-row status-${statuses.get(account.email).tone}">
+    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span><span class="account-meta">${statusBadge(statuses.get(account.email))}${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></span></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
   const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
@@ -274,7 +311,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
 
   return shell(`
     <div class="heading">
-      <div><p class="eyebrow">ACCOUNT OVERVIEW</p><h1>账户积分报告</h1><p class="description">每一次上报，都有迹可循。查看各账号的最新积分与最近 5 次记录。</p></div>
+      <div><p class="eyebrow">ACCOUNT OVERVIEW</p><h1>账户积分报告</h1><p class="description">每一次上报，都有迹可循。查看最新积分、历史记录与近24小时状态。</p><p class="report-clock"><span class="timezone">日本时间 JST</span><time datetime="${new Date(now).toISOString()}">${japanNow}</time><span>· 本次更新</span></p></div>
       <div class="heading-actions">
         <a class="refresh" href="${escapeHtml(refreshUrl)}">${refreshIcon}刷新报告</a>
         <form class="manage-form" action="/" method="get">
@@ -298,6 +335,15 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
           <button type="submit">搜索</button>${query ? `<a class="clear" href="${escapeHtml(clearUrl)}">清除</a>` : ""}
         </form>
       </div>
+      <div class="status-legend" role="group" aria-label="按日本时间判断最近24小时的账号状态">
+        <span class="legend-caption">近24小时状态</span>
+        <div class="legend-items">
+          <span class="legend-item status-green" title="24小时内有积分增长，或只有一份近期报告的新账号"><span class="status-dot" aria-hidden="true"></span><span>有增长<span class="legend-extra"> / 新账号</span></span><b>${statusCounts.green}</b></span>
+          <span class="legend-item status-yellow" title="24小时内有报告，但未发现积分提升"><span class="status-dot" aria-hidden="true"></span><span>无增长</span><b>${statusCounts.yellow}</b></span>
+          <span class="legend-item status-red" title="超过24小时未上报，或最近报告时间异常"><span class="status-dot" aria-hidden="true"></span><span>需关注</span><b>${statusCounts.red}</b></span>
+        </div>
+        <span class="legend-note">新账号首份报告在24小时内也标绿</span>
+      </div>
       <div class="table-scroll desktop-reports" role="region" aria-label="账户积分与五次报告记录，可左右滚动" tabindex="0">
         <table>
           <caption class="sr-only">各账号最近收到的五份报告，按最新一份报告的报告时间降序排列。</caption>
@@ -305,10 +351,10 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
           <tbody>${rows || empty}</tbody>
         </table>
       </div>
-      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, refreshUrl, manage)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
+      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, statuses.get(account.email), refreshUrl, manage)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
       <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
     </section>
-    <footer><span>MyReport · 账户积分记录</span><span>时间按上报原值显示 · 刷新页面获取最新数据</span></footer>
+    <footer><span>MyReport · 账户积分记录</span><span>报告时间按日本时间解读 · 刷新页面更新数据与状态</span></footer>
   `, { authenticated: true });
 }
 

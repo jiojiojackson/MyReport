@@ -18,7 +18,7 @@ let sessionCookie;
 
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({
-    modules: ["index.js", "page.js", "auth.js"].map((filename) => ({
+    modules: ["index.js", "page.js", "auth.js", "report-status.js"].map((filename) => ({
       type: "ESModule",
       path: fileURLToPath(new URL(`../src/${filename}`, import.meta.url)),
     })),
