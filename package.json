@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "check": "node --check src/index.js && node --check src/page.js && node --check src/auth.js && node --check src/report-status.js",
+    "check": "node --check src/index.js && node --check src/page.js && node --check src/auth.js && node --check src/report-status.js && node --check public/copy-email.js",
     "test": "node --test",
     "build": "npm run check && wrangler deploy --dry-run --outdir dist",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",

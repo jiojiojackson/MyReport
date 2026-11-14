@@ -5,6 +5,7 @@
 ## 功能与数据规则
 
 - 打开 Worker 根地址 `/`，登录后查看报告；支持邮箱关键词搜索和手动刷新。电脑端使用表格，手机竖屏自动使用账号卡片。
+- 点击账号邮箱即可复制完整邮箱到剪贴板，并显示“邮箱已复制”提示；电脑表格和手机卡片均支持，键盘聚焦后按 Enter 或空格也可复制。
 - `POST /api/reports` 接收报告，使用环境变量 `API_KEY` 验证密钥。`POST /` 也可使用。
 - 邮箱去除首尾空白并统一为小写，作为账号唯一主键；每个邮箱**只保留最后收到的 5 份报告**。
 - 历史记录按数据库接收顺序从新到旧排列；同一分钟、多次相同积分或相同报告时间的上报仍分别保存。
@@ -89,7 +90,7 @@
      "keep_vars": true,
      "assets": {
        "directory": "./public",
-       "run_worker_first": ["/*", "!/favicon.svg", "!/favicon.ico", "!/apple-touch-icon.png"]
+       "run_worker_first": ["/*", "!/favicon.svg", "!/favicon.ico", "!/apple-touch-icon.png", "!/copy-email.js"]
      },
      "d1_databases": [
        {
@@ -367,6 +368,7 @@ src/page.js                           中文报告页面与响应式样式
 src/auth.js                           登录凭据验证与签名 Cookie 会话
 src/report-status.js                  日本时间与24小时账号状态规则
 public/                               标签页 SVG / ICO 图标及手机收藏图标
+public/copy-email.js                   邮箱点击复制与操作反馈
 migrations/0001_create_reports.sql     D1 表结构与索引
 test/worker.test.js                    Worker / D1 集成测试
 test/report-status.test.js             时区、24小时边界与状态规则测试

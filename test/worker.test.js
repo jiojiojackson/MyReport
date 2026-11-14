@@ -320,6 +320,8 @@ test("mailbox and search markup is escaped and SQL values are bound", async () =
   assert.ok(!html.includes("<svg/onload=alert(1)>"));
   assert.ok(html.includes("&lt;svg/onload=alert(1)&gt;@example.com"));
   assert.ok(html.includes("o&#39;hara@example.com"));
+  assert.ok(html.includes('data-copy-email="&lt;svg/onload=alert(1)&gt;@example.com"'));
+  assert.ok(html.includes('data-copy-email="o&#39;hara@example.com"'));
   const query = '\"><script>alert(1)</script>';
   const searchHtml = await (await read("/?q=" + encodeURIComponent(query))).text();
   assert.ok(!searchHtml.includes("<script>"));
@@ -327,14 +329,23 @@ test("mailbox and search markup is escaped and SQL values are bound", async () =
   assert.equal((await data()).length, 2);
 });
 
-test("page and API responses are not cached; the page disallows scripts", async () => {
+test("responses are not cached and only the report page permits self-hosted copy JavaScript", async () => {
   for (const path of ["/", "/api/reports"]) {
     const response = await read(path);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
   const page = await read();
-  assert.match(page.headers.get("content-security-policy"), /script-src 'none'/);
+  assert.match(page.headers.get("content-security-policy"), /script-src 'self';/);
+  const html = await page.text();
+  assert.ok(html.includes('<script src="/copy-email.js" defer></script>'));
+  assert.equal((html.match(/<script\b/g) ?? []).length, 1);
+  await post();
+  for (const path of ["/login", "/accounts/delete?email=alice%40example.com"]) {
+    const response = path === "/login" ? await visit(path) : await read(path);
+    assert.match(response.headers.get("content-security-policy"), /script-src 'none'/);
+    assert.ok(!(await response.text()).includes("<script"));
+  }
 });
 
 test("HEAD, unsupported methods and unknown paths return appropriate responses", async () => {

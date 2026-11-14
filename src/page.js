@@ -89,6 +89,15 @@ const STYLES = `
   .avatar { background:#f0f3ed; color:#718268; width:30px; height:30px; border:1px solid #e7ece3; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
   .report-row .avatar, .account-card .avatar { color:var(--status-color); background:var(--status-badge); border-color:var(--status-border); }
   .email { max-width:240px; overflow:hidden; text-overflow:ellipsis; color:#35463d; font-weight:500; }
+  .email-copy { display:inline-flex; align-items:center; justify-self:start; gap:6px; max-width:100%; min-width:0; margin:0; padding:0; border:0; border-radius:4px; background:transparent; color:inherit; font:inherit; text-align:left; line-height:1.6; cursor:pointer; }
+  .email-copy .email { min-width:0; }
+  .email-copy:hover { background:transparent; }
+  .email-copy:hover .email, .email-copy:focus-visible .email { color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
+  .copy-icon { width:13px; height:13px; flex-shrink:0; color:var(--muted); opacity:.55; }
+  .email-copy:hover .copy-icon, .email-copy:focus-visible .copy-icon, .email-copy[data-copied="true"] .copy-icon { color:var(--accent); opacity:1; }
+  .copy-feedback { position:fixed; z-index:20; left:50%; bottom:max(20px,env(safe-area-inset-bottom)); transform:translateX(-50%); max-width:calc(100% - 32px); margin:0; padding:11px 16px; border:1px solid #456b55; border-radius:9px; background:#2b4b39; color:#fff; box-shadow:0 5px 20px #19332720; font-size:12px; line-height:1.6; opacity:0; pointer-events:none; }
+  .copy-feedback[data-visible="true"] { opacity:1; }
+  .copy-feedback[data-error="true"] { border-color:#a56c61; background:#864f46; }
   .account-details { display:grid; gap:6px; min-width:0; }
   .delete-link { display:inline-flex; align-items:center; justify-self:start; min-height:30px; padding:5px 8px; border:1px solid #eddad6; border-radius:5px; background:#fff7f5; font-size:11px; color:#a15c50; }
   .delete-link:hover { color:#843d33; text-decoration:underline; }
@@ -98,6 +107,8 @@ const STYLES = `
   .card-heading { min-width:0; display:grid; gap:5px; }
   .card-account .avatar { align-self:flex-start; margin-top:2px; width:34px; height:34px; border-radius:9px; }
   .card-email { min-width:0; margin:0; font-size:13px; font-weight:600; line-height:1.6; overflow-wrap:anywhere; }
+  .card-email .email-copy { min-height:32px; align-items:baseline; }
+  .card-email .email { max-width:none; overflow:visible; text-overflow:clip; font-weight:inherit; }
   .card-latest, .history-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr); gap:12px; font-variant-numeric:tabular-nums; }
   .card-latest { margin:18px 0 16px; }
   .card-latest-wide, .history-row-wide { grid-template-columns:minmax(0,1fr); }
@@ -194,8 +205,9 @@ function escapeHtml(value) {
 
 const refreshIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg>`;
 const searchIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>`;
+const copyIcon = `<svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>`;
 
-function shell(content, { authenticated = false, title = "账户积分报告 · MyReport" } = {}) {
+function shell(content, { authenticated = false, copyEmail = false, title = "账户积分报告 · MyReport" } = {}) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -209,6 +221,7 @@ function shell(content, { authenticated = false, title = "账户积分报告 · 
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
   <title>${escapeHtml(title)}</title>
   <style>${STYLES}</style>
+  ${copyEmail ? '<script src="/copy-email.js" defer></script>' : ""}
 </head>
 <body>
   <header class="topbar">
@@ -216,6 +229,7 @@ function shell(content, { authenticated = false, title = "账户积分报告 · 
     <div class="top-actions"><span class="top-note">账户数据 · 轻松掌握</span>${authenticated ? '<form class="logout-form" action="/logout" method="post"><button class="logout-button" type="submit">退出登录</button></form>' : ""}</div>
   </header>
   <main>${content}</main>
+  ${copyEmail ? '<p id="copy-feedback" class="copy-feedback" role="status" aria-live="polite" aria-atomic="true"></p>' : ""}
 </body>
 </html>`;
 }
@@ -260,6 +274,11 @@ function deleteLink(email, returnTo) {
   return `<a class="delete-link" href="/accounts/delete?email=${encodeURIComponent(email)}&amp;next=${encodeURIComponent(returnTo)}" aria-label="删除 ${escapeHtml(email)} 的全部记录">删除全部记录</a>`;
 }
 
+function emailCopyButton(email) {
+  const escaped = escapeHtml(email);
+  return `<button class="email-copy" type="button" data-copy-email="${escaped}" title="点击复制邮箱" aria-label="复制邮箱 ${escaped}"><span class="email" title="${escaped}">${escaped}</span>${copyIcon}</button>`;
+}
+
 function reportTime(value) {
   return `<time datetime="${escapeHtml(String(value).replace(" ", "T"))}:00+09:00">${escapeHtml(value)}</time>`;
 }
@@ -274,7 +293,7 @@ function mobileAccount(account, status, returnTo, manage) {
   const pointsLength = String(latest.total_points).length;
   const widePoints = pointsLength > 10 || (increase !== null && pointsLength + increase.length > 5);
   return `<article class="account-card status-${status.tone}" role="listitem">
-    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${escapeHtml(account.email)}</h3>${statusBadge(status)}</div></header>
+    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${emailCopyButton(account.email)}</h3>${statusBadge(status)}</div></header>
     <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
       <div><dt>最近总积分</dt><dd class="card-points">${latestPoints(account.reports)}</dd></div>
       <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
@@ -303,7 +322,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
   const rows = filtered.map((account) => `<tr class="report-row status-${statuses.get(account.email).tone}">
-    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details"><span class="email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</span><span class="account-meta">${statusBadge(statuses.get(account.email))}${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></span></th>
+    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details">${emailCopyButton(account.email)}<span class="account-meta">${statusBadge(statuses.get(account.email))}${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></span></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
   const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
@@ -355,7 +374,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
       <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
     </section>
     <footer><span>MyReport · 账户积分记录</span><span>报告时间按日本时间解读 · 刷新页面更新数据与状态</span></footer>
-  `, { authenticated: true });
+  `, { authenticated: true, copyEmail: true });
 }
 
 export function renderUnavailablePage() {

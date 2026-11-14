@@ -33,8 +33,12 @@ function json(body, status = 200, headers = {}) {
   });
 }
 
-function html(content, status = 200) {
-  return new Response(content, { status, headers: HTML_HEADERS });
+function html(content, status = 200, { copyEmail = false } = {}) {
+  const headers = { ...HTML_HEADERS };
+  if (copyEmail) {
+    headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace("script-src 'none'", "script-src 'self'");
+  }
+  return new Response(content, { status, headers });
 }
 
 function redirect(location, status = 302, headers = {}) {
@@ -304,7 +308,7 @@ async function handleRequest(request, env) {
     return html(renderPage(accounts, query, {
       deleted: url.searchParams.get("deleted") === "1",
       manage: url.searchParams.get("manage") === "1",
-    }));
+    }), 200, { copyEmail: true });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError
