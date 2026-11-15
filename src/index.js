@@ -279,6 +279,11 @@ function normalizeTags(value) {
   return tags;
 }
 
+function tagView(url) {
+  const tag = (url.searchParams.get("tag") ?? "").trim().slice(0, 256);
+  return { tag, untagged: !tag && url.searchParams.get("untagged") === "1" };
+}
+
 async function handleAccountTags(request, env, url) {
   checkFormOrigin(request, true);
   const form = await readForm(request);
@@ -298,7 +303,7 @@ async function handleAccountTags(request, env, url) {
     if (!accounts.some((account) => account.email === email)) throw new HttpError(404, "账号不存在或已被删除，请刷新报告后重试。");
     const query = (destination.searchParams.get("q") ?? "").trim().slice(0, 254);
     return html(renderPage(accounts, query, {
-      manage: true, tagError: { email, value: value.slice(0, 256), message: error.message },
+      manage: true, ...tagView(destination), tagError: { email, value: value.slice(0, 256), message: error.message },
     }), error.status, { copyEmail: true });
   }
 
@@ -363,6 +368,7 @@ async function handleRequest(request, env) {
       deleted: url.searchParams.get("deleted") === "1",
       manage: url.searchParams.get("manage") === "1",
       tagsSaved: url.searchParams.get("tags_saved") === "1",
+      ...tagView(url),
     }), 200, { copyEmail: true });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;

@@ -998,3 +998,115 @@ test("the tag migration upgrades a populated legacy database without changing ac
     await legacyRuntime.dispose();
   }
 });
+
+test("tag views match complete tags, combine with email search and keep report ordering", async () => {
+  await post({ ...example, email: "bob@example.com", report_time: "2026-11-12 08:32" });
+  await post({ ...example, report_time: "2026-11-12 08:31" });
+  await post({ ...example, email: "carol@example.com", report_time: "2026-11-12 08:30" });
+  await saveTags({ tags: "主账号" });
+  await saveTags({ email: "bob@example.com", tags: "主账号，常用" });
+  await saveTags({ email: "carol@example.com", tags: "备用" });
+  const before = await data();
+  const html = await (await read("/?tag=" + encodeURIComponent("主账号"))).text();
+  assert.ok(html.includes('title="alice@example.com"'));
+  assert.ok(html.includes('title="bob@example.com"'));
+  assert.ok(!html.includes('title="carol@example.com"'));
+  assert.ok(html.indexOf('title="bob@example.com"') < html.indexOf('title="alice@example.com"'));
+  assert.ok(html.includes("匹配 2 / 3 个账号"));
+  assert.equal((html.match(/scope="col"/g) ?? []).length, 11);
+  const combined = await (await read("/?q=ALICE&tag=" + encodeURIComponent("主账号"))).text();
+  assert.ok(combined.includes('title="alice@example.com"'));
+  assert.ok(!combined.includes('title="bob@example.com"'));
+  const empty = await (await read("/?q=alice&tag=" + encodeURIComponent("备用"))).text();
+  assert.ok(empty.includes("没有找到匹配的账号"));
+  assert.ok(!empty.includes("等待第一份报告"));
+  assert.ok(empty.includes("匹配 0 / 3 个账号"));
+  const partial = await (await read("/?tag=" + encodeURIComponent("主账"))).text();
+  assert.ok(!partial.includes('title="alice@example.com"'));
+  assert.deepEqual((await (await read("/api/reports?tag=" + encodeURIComponent("主账号"))).json()).data, before);
+});
+
+test("untagged views stay distinct from a real tag named 未打标签 and unknown tags stay empty", async () => {
+  await post();
+  await post({ ...example, email: "bob@example.com" });
+  await saveTags({ tags: "未打标签" });
+  const untagged = await (await read("/?untagged=1")).text();
+  assert.ok(untagged.includes('title="bob@example.com"'));
+  assert.ok(!untagged.includes('title="alice@example.com"'));
+  for (const suffix of ["", "&untagged=1"]) {
+    const tagged = await (await read("/?tag=" + encodeURIComponent("未打标签") + suffix)).text();
+    assert.ok(tagged.includes('title="alice@example.com"'));
+    assert.ok(!tagged.includes('title="bob@example.com"'));
+  }
+  const unknown = await (await read("/?tag=" + encodeURIComponent("不存在"))).text();
+  assert.ok(unknown.includes("没有找到匹配的账号"));
+  assert.ok(unknown.includes('aria-current="page"'));
+  assert.ok(unknown.includes("重置筛选"));
+  assert.ok(!unknown.includes('title="alice@example.com"'));
+  assert.ok(!unknown.includes('title="bob@example.com"'));
+});
+
+test("tag view controls retain search and management state while clear and reset have separate scopes", async () => {
+  await post();
+  await saveTags({ tags: "主账号" });
+  const params = new URLSearchParams({ q: "alice", tag: "主账号", manage: "1" });
+  const view = "/?" + params;
+  const html = await (await read(view)).text();
+  const escapedView = view.replace(/&/g, "&amp;");
+  assert.ok(html.includes(`href="${escapedView}"`));
+  assert.ok(html.includes(`name="next" value="${escapedView}"`));
+  assert.equal((html.match(/name="tag" value="主账号"/g) ?? []).length, 2);
+  assert.ok(html.includes('href="/?manage=1"'));
+  assert.ok(html.includes('href="/?q=alice&amp;manage=1"'));
+  assert.ok(html.includes(`href="/?${new URLSearchParams({ tag: "主账号", manage: "1" }).toString().replace(/&/g, "&amp;")}"`));
+  assert.ok(html.includes("next=" + encodeURIComponent(view)));
+  assert.equal((html.match(/<a class="view-chip"[^>]*aria-current="page"/g) ?? []).length, 1);
+  const untagged = await (await read("/?q=alice&untagged=1&manage=1")).text();
+  assert.equal((untagged.match(/name="untagged" value="1"/g) ?? []).length, 2);
+  assert.ok(untagged.includes('href="/?q=alice&amp;untagged=1&amp;manage=1"'));
+});
+
+test("tag editing errors, clearing tags and deleting accounts keep the selected view", async () => {
+  await post();
+  await saveTags({ tags: "主账号" });
+  const view = "/?" + new URLSearchParams({ q: "alice", tag: "主账号", manage: "1" });
+  const invalid = await saveTags({ tags: "字".repeat(21), next: view });
+  assert.equal(invalid.status, 400);
+  const errorHtml = await invalid.text();
+  assert.ok(errorHtml.includes('name="tag" value="主账号"'));
+  assert.ok(errorHtml.includes('class="tag-editor" open'));
+  assert.ok(errorHtml.includes('title="alice@example.com"'));
+  const cleared = await saveTags({ tags: "", next: view });
+  assert.equal(cleared.headers.get("location"), view + "&tags_saved=1");
+  const empty = await (await read(cleared.headers.get("location"))).text();
+  assert.ok(empty.includes("账号标签已保存。"));
+  assert.ok(empty.includes("没有找到匹配的账号"));
+  assert.ok(!empty.includes('title="alice@example.com"'));
+  assert.equal((await data()).length, 1);
+  await saveTags({ tags: "主账号", next: view });
+  const deleted = await deleteAccount({ next: view });
+  assert.equal(deleted.headers.get("location"), view + "&deleted=1");
+  const afterDelete = await (await read(deleted.headers.get("location"))).text();
+  assert.ok(afterDelete.includes("没有找到匹配的账号"));
+  assert.ok(afterDelete.includes('name="tag" value="主账号"'));
+});
+
+test("tag view labels and URLs are escaped, read-only and preserved through login", async () => {
+  const tag = "<script>x()</script>";
+  await post();
+  await saveTags({ tags: tag + ",A&B" });
+  const before = await data();
+  const view = "/?" + new URLSearchParams({ tag, manage: "1" });
+  const html = await (await read(view)).text();
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("&lt;script&gt;x()&lt;/script&gt;"));
+  assert.ok(html.includes(new URLSearchParams({ tag, manage: "1" }).toString().replace(/&/g, "&amp;")));
+  const hostile = await (await read("/?tag=" + encodeURIComponent('\"><svg/onload=x>'))).text();
+  assert.ok(!hostile.includes('\"><svg/onload=x>'));
+  assert.ok(hostile.includes("&lt;svg/onload=x&gt;"));
+  const loggedOut = await visit(view);
+  assert.equal(loggedOut.headers.get("location"), "/login?next=" + encodeURIComponent(view));
+  assert.equal((await login({ next: view })).headers.get("location"), view);
+  assert.deepEqual(await data(), before);
+  assert.deepEqual(await storedTags(), [tag, "A&B"]);
+});

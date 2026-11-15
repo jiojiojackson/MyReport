@@ -53,6 +53,18 @@ const STYLES = `
   button { border:1px solid #dbe4de; border-radius:6px; background:#f2f6f3; font:inherit; font-size:12px; color:var(--accent); padding:8px 12px; cursor:pointer; }
   button:hover { background:#e5eee8; }
   .clear { font-size:12px; color:var(--muted); padding:8px 0 8px 4px; }
+  .tag-views { padding:15px 22px 17px; border-top:1px solid var(--line); background:#fff; }
+  .tag-views-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+  .tag-views-title { color:var(--muted); font-size:11px; font-weight:500; }
+  .reset-filters { color:var(--accent); font-size:11px; text-decoration:underline; text-underline-offset:3px; }
+  .view-options { display:flex; flex-wrap:wrap; gap:7px; }
+  .view-chip { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:100%; padding:7px 10px; border:1px solid #dfe6e2; border-radius:7px; background:#f9fbfa; color:#64776c; font-size:12px; line-height:1.5; }
+  .view-chip:hover { background:#edf3ef; border-color:#bfd0c5; }
+  .view-chip[aria-current="page"] { color:#fff; background:var(--accent); border-color:var(--accent); }
+  .view-chip-label { min-width:0; overflow-wrap:anywhere; }
+  .view-count { flex-shrink:0; padding:0 5px; border-radius:4px; background:#eaf0ec; color:#64776c; font-size:10px; font-variant-numeric:tabular-nums; }
+  .view-chip[aria-current="page"] .view-count { background:#ffffff24; color:#fff; }
+  .view-tag-icon { flex-shrink:0; width:12px; height:12px; }
   .status-green { --status-color:#326e53; --status-dot:#529675; --status-bg:#f1f8f3; --status-hover:#e8f3ec; --status-border:#dcebe1; --status-badge:#e2efe6; }
   .status-yellow { --status-color:#8b681f; --status-dot:#bf9743; --status-bg:#fffbf1; --status-hover:#fcf4df; --status-border:#eee4c8; --status-badge:#f6edcf; }
   .status-red { --status-color:#9a5d56; --status-dot:#bd8178; --status-bg:#fff5f3; --status-hover:#fbece8; --status-border:#efded9; --status-badge:#f5e5e1; }
@@ -101,6 +113,7 @@ const STYLES = `
   .account-details { display:grid; gap:6px; min-width:0; }
   .account-meta { max-width:260px; }
   .account-tag { display:inline-flex; min-width:0; max-width:100%; padding:2px 7px; border:1px solid #d8e1e7; border-radius:5px; background:#edf2f5; color:#526878; font-size:10px; font-weight:500; line-height:1.5; white-space:normal; overflow-wrap:anywhere; }
+  .account-tag:hover { background:#e2ebf0; border-color:#b9cdd8; }
   .account-actions { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; min-width:0; }
   .tag-editor { min-width:0; }
   .tag-editor[open] { flex-basis:100%; }
@@ -205,6 +218,8 @@ const STYLES = `
     input { width:100%; min-width:0; }
     .search input { font-size:16px; }
     .toolbar button { min-height:40px; }
+    .tag-views { padding:14px 16px; }
+    .view-chip { min-height:38px; padding:7px 9px; font-size:11px; }
     .tag-form { max-width:none; }
     .tag-form input { font-size:16px; }
     .tag-form button { min-height:40px; }
@@ -225,6 +240,7 @@ function escapeHtml(value) {
 const refreshIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg>`;
 const searchIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>`;
 const copyIcon = `<svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>`;
+const tagIcon = `<svg class="view-tag-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 3h6l8 8-6 6-8-8V3Z"/><circle cx="6.5" cy="6.5" r=".8"/></svg>`;
 
 function shell(content, { authenticated = false, copyEmail = false, title = "账户积分报告 · MyReport" } = {}) {
   return `<!doctype html>
@@ -282,9 +298,11 @@ function reportCells(reports) {
   }).join("");
 }
 
-function reportUrl(query, manage) {
+function reportUrl(query, manage, tag = "", untagged = false) {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
+  if (tag) params.set("tag", tag);
+  else if (untagged) params.set("untagged", "1");
   if (manage) params.set("manage", "1");
   return params.size ? `/?${params}` : "/";
 }
@@ -306,8 +324,24 @@ function statusBadge(status) {
   return `<span class="status-badge" title="${escapeHtml(status.description)}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(status.label)}</span>`;
 }
 
-function tagBadges(tags = []) {
-  return tags.map((tag) => `<span class="account-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("");
+function tagBadges(tags = [], query = "", manage = false) {
+  return tags.map((tag) => `<a class="account-tag" href="${escapeHtml(reportUrl(query, manage, tag))}" title="按标签筛选：${escapeHtml(tag)}">${escapeHtml(tag)}</a>`).join("");
+}
+
+function tagViews(accounts, emailMatches, { query, manage, tag, untagged, resetUrl }) {
+  const counts = new Map();
+  for (const account of accounts) for (const value of account.tags ?? []) counts.set(value, 0);
+  for (const account of emailMatches) for (const value of account.tags ?? []) counts.set(value, counts.get(value) + 1);
+  if (tag && !counts.has(tag)) counts.set(tag, 0);
+  const chip = (label, count, href, active, tagged = false) => `<a class="view-chip" href="${escapeHtml(href)}"${active ? ' aria-current="page"' : ""}${tagged ? ` title="按标签筛选：${escapeHtml(label)}"` : ""}>${tagged ? tagIcon : ""}<span class="view-chip-label">${escapeHtml(label)}</span><span class="view-count">${count}</span></a>`;
+  return `<nav class="tag-views" aria-label="标签视图">
+    <div class="tag-views-heading"><span class="tag-views-title">标签视图</span>${query || tag || untagged ? `<a class="reset-filters" href="${escapeHtml(resetUrl)}">重置筛选</a>` : ""}</div>
+    <div class="view-options">
+      ${chip("全部标签", emailMatches.length, reportUrl(query, manage), !tag && !untagged)}
+      ${chip("未打标签", emailMatches.filter((account) => !account.tags?.length).length, reportUrl(query, manage, "", true), untagged)}
+      ${[...counts].sort(([left], [right]) => left.localeCompare(right, "zh-CN")).map(([value, count]) => chip(value, count, reportUrl(query, manage, value), tag === value, true)).join("")}
+    </div>
+  </nav>`;
 }
 
 function accountActions(account, returnTo, variant, error) {
@@ -329,13 +363,13 @@ function accountActions(account, returnTo, variant, error) {
   </div>`;
 }
 
-function mobileAccount(account, status, returnTo, manage, tagError) {
+function mobileAccount(account, status, returnTo, manage, tagError, query) {
   const [latest, ...history] = account.reports;
   const increase = pointsIncrease(account.reports);
   const pointsLength = String(latest.total_points).length;
   const widePoints = pointsLength > 10 || (increase !== null && pointsLength + increase.length > 5);
   return `<article class="account-card status-${status.tone}" role="listitem">
-    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${emailCopyButton(account.email)}</h3><div class="account-meta">${statusBadge(status)}${tagBadges(account.tags)}</div></div></header>
+    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${emailCopyButton(account.email)}</h3><div class="account-meta">${statusBadge(status)}${tagBadges(account.tags, query, manage)}</div></div></header>
     <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
       <div><dt>最近总积分</dt><dd class="card-points">${latestPoints(account.reports)}</dd></div>
       <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
@@ -350,24 +384,29 @@ function mobileAccount(account, status, returnTo, manage, tagError) {
   </article>`;
 }
 
-export function renderPage(accounts, query = "", { deleted = false, manage = false, tagsSaved = false, tagError = null, now = Date.now() } = {}) {
-  const filtered = accounts.filter((account) => account.email.includes(query.toLowerCase()));
+export function renderPage(accounts, query = "", { deleted = false, manage = false, tagsSaved = false, tagError = null, tag = "", untagged = false, now = Date.now() } = {}) {
+  untagged = !tag && untagged;
+  const emailMatches = accounts.filter((account) => account.email.includes(query.toLowerCase()));
+  const filtered = emailMatches.filter((account) => tag ? account.tags?.includes(tag) : !untagged || !account.tags?.length);
+  const hasFilter = Boolean(query || tag || untagged);
   const statuses = new Map(accounts.map((account) => [account.email, reportStatus(account.reports, now)]));
   const statusCounts = { green: 0, yellow: 0, red: 0 };
   for (const account of filtered) statusCounts[statuses.get(account.email).tone]++;
   const japanNow = formatJapanTime(now);
   const retained = accounts.reduce((total, account) => total + account.reports.length, 0);
   const latest = accounts[0]?.reports[0]?.report_time ?? "暂无报告";
-  const refreshUrl = reportUrl(query, manage);
-  const clearUrl = reportUrl("", manage);
+  const refreshUrl = reportUrl(query, manage, tag, untagged);
+  const clearUrl = reportUrl("", manage, tag, untagged);
+  const resetUrl = reportUrl("", manage);
+  const viewInput = tag ? `<input type="hidden" name="tag" value="${escapeHtml(tag)}">` : untagged ? '<input type="hidden" name="untagged" value="1">' : "";
   const headers = ["账号名称", "最近总积分", "最近报告时间", ...Array.from({ length: 4 }, (_, i) => [
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
   const rows = filtered.map((account) => `<tr class="report-row status-${statuses.get(account.email).tone}">
-    <th scope="row"><div class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="account-details">${emailCopyButton(account.email)}<div class="account-meta">${statusBadge(statuses.get(account.email))}${tagBadges(account.tags)}</div>${manage ? accountActions(account, refreshUrl, "desktop", tagError) : ""}</div></div></th>
+    <th scope="row"><div class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="account-details">${emailCopyButton(account.email)}<div class="account-meta">${statusBadge(statuses.get(account.email))}${tagBadges(account.tags, query, manage)}</div>${manage ? accountActions(account, refreshUrl, "desktop", tagError) : ""}</div></div></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
-  const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
+  const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${hasFilter ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${hasFilter ? "试试其他邮箱或标签，或重置筛选查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
   const empty = `<tr><td colspan="11" class="empty">${emptyContent}</td></tr>`;
 
   return shell(`
@@ -377,6 +416,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
         <a class="refresh" href="${escapeHtml(refreshUrl)}">${refreshIcon}刷新报告</a>
         <form class="manage-form" action="/" method="get">
           ${query ? `<input type="hidden" name="q" value="${escapeHtml(query)}">` : ""}
+          ${viewInput}
           <button class="manage-button" type="submit" name="manage" value="${manage ? "0" : "1"}" aria-pressed="${manage}">${manage ? "完成管理" : "管理账号"}</button>
         </form>
       </div>
@@ -391,13 +431,15 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
     </dl>
     <section class="report" aria-labelledby="reports-title">
       <div class="toolbar">
-        <h2 id="reports-title">全部账号<span class="count">${filtered.length}</span></h2>
+        <h2 id="reports-title">${hasFilter ? "筛选结果" : "全部账号"}<span class="count">${filtered.length}</span></h2>
         <form action="/" method="get" role="search">
           ${manage ? '<input type="hidden" name="manage" value="1">' : ""}
+          ${viewInput}
           <div class="search">${searchIcon}<label class="sr-only" for="email-search">搜索账户邮箱</label><input id="email-search" name="q" type="search" maxlength="254" placeholder="搜索账户邮箱…" value="${escapeHtml(query)}"></div>
           <button type="submit">搜索</button>${query ? `<a class="clear" href="${escapeHtml(clearUrl)}">清除</a>` : ""}
         </form>
       </div>
+      ${tagViews(accounts, emailMatches, { query, manage, tag, untagged, resetUrl })}
       <div class="status-legend" role="group" aria-label="按日本时间判断最近24小时的账号状态">
         <span class="legend-caption">近24小时状态</span>
         <div class="legend-items">
@@ -414,8 +456,8 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
           <tbody>${rows || empty}</tbody>
         </table>
       </div>
-      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, statuses.get(account.email), refreshUrl, manage, tagError)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
-      <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
+      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, statuses.get(account.email), refreshUrl, manage, tagError, query)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
+      <div class="table-footer"><span>${hasFilter ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
     </section>
     <footer><span>MyReport · 账户积分记录</span><span>报告时间按日本时间解读 · 刷新页面更新数据与状态</span></footer>
   `, { authenticated: true, copyEmail: true });
