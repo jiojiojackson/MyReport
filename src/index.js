@@ -1,4 +1,4 @@
-import { renderDeletePage, renderLoginPage, renderPage, renderUnavailablePage } from "./page.js";
+import { renderDeletePage, renderLoginPage, renderPage, renderTagErrorPage, renderUnavailablePage } from "./page.js";
 import {
   clearSessionCookie, createSessionCookie, credentialsMatch,
   isAuthenticated, loginConfigured, safeReturnTo, secretMatches,
@@ -180,20 +180,24 @@ async function receiveReport(request, env) {
   return json({ success: true, message: "报告已接收。", data: report }, 201);
 }
 
-async function listReports(env) {
+async function listReports(env, { includeTags = false } = {}) {
   const db = requireDatabase(env);
-  const { results } = await db.prepare(`
+  const reports = db.prepare(`
     SELECT account_email AS email, total_points, report_time
     FROM reports ORDER BY id DESC
-  `).all();
+  `);
+  const [reportData, tagData] = includeTags
+    ? await db.batch([reports, db.prepare("SELECT account_email, tag FROM account_tags ORDER BY account_email, position")])
+    : [await reports.all()];
   const accounts = new Map();
-  for (const row of results) {
-    if (!accounts.has(row.email)) accounts.set(row.email, { email: row.email, reports: [] });
+  for (const row of reportData.results) {
+    if (!accounts.has(row.email)) accounts.set(row.email, { email: row.email, reports: [], ...(includeTags ? { tags: [] } : {}) });
     accounts.get(row.email).reports.push({
       total_points: row.total_points,
       report_time: row.report_time,
     });
   }
+  for (const row of tagData?.results ?? []) accounts.get(row.account_email)?.tags.push(row.tag);
   return [...accounts.values()].sort((left, right) =>
     right.reports[0].report_time.localeCompare(left.reports[0].report_time) ||
     left.email.localeCompare(right.email),
@@ -266,6 +270,54 @@ async function handleAccountDelete(request, env, url) {
   return html(renderDeletePage({ email: account.email, reportCount: account.report_count, returnTo }));
 }
 
+function normalizeTags(value) {
+  const tags = [...new Set(value.split(/[,，;；\r\n]+/u).map((tag) => tag.trim()).filter(Boolean))];
+  if (tags.length > 5) throw new HttpError(400, "每个账号最多添加5个标签。");
+  if (tags.some((tag) => [...tag].length > 20 || /[\u0000-\u001f\u007f]/u.test(tag))) {
+    throw new HttpError(400, "每个标签最多20个字符，且不能包含控制字符。");
+  }
+  return tags;
+}
+
+async function handleAccountTags(request, env, url) {
+  checkFormOrigin(request, true);
+  const form = await readForm(request);
+  if (form.getAll("email").length !== 1 || form.getAll("tags").length !== 1) {
+    throw new HttpError(400, "请在管理模式下填写账号标签后保存。");
+  }
+  const email = normalizeEmail(form.get("email"));
+  const returnTo = safeReturnTo(form.get("next"));
+  const destination = new URL(returnTo, url.origin);
+  const value = form.get("tags");
+  let tags;
+  try {
+    tags = normalizeTags(value);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    const accounts = await listReports(env, { includeTags: true });
+    if (!accounts.some((account) => account.email === email)) throw new HttpError(404, "账号不存在或已被删除，请刷新报告后重试。");
+    const query = (destination.searchParams.get("q") ?? "").trim().slice(0, 254);
+    return html(renderPage(accounts, query, {
+      manage: true, tagError: { email, value: value.slice(0, 256), message: error.message },
+    }), error.status, { copyEmail: true });
+  }
+
+  // 检查账号、替换标签在同一事务中完成。INSERT SELECT 不会重建已删除的账号。
+  const db = requireDatabase(env);
+  const [account] = await db.batch([
+    db.prepare("SELECT email FROM accounts WHERE email = ?").bind(email),
+    db.prepare("DELETE FROM account_tags WHERE account_email = ?").bind(email),
+    ...tags.map((tag, position) => db.prepare(`
+      INSERT INTO account_tags (account_email, position, tag)
+      SELECT email, ?, ? FROM accounts WHERE email = ?
+    `).bind(position, tag, email)),
+  ]);
+  if (!account.results.length) throw new HttpError(404, "账号不存在或已被删除，请刷新报告后重试。");
+  destination.searchParams.set("manage", "1");
+  destination.searchParams.set("tags_saved", "1");
+  return redirect(destination.pathname + destination.search, 303);
+}
+
 async function handleRequest(request, env) {
   const url = new URL(request.url);
   const isPage = url.pathname === "/";
@@ -273,10 +325,11 @@ async function handleRequest(request, env) {
   const isLogin = url.pathname === "/login";
   const isLogout = url.pathname === "/logout";
   const isDelete = url.pathname === "/accounts/delete";
-  if (!isPage && !isApi && !isLogin && !isLogout && !isDelete) {
+  const isTags = url.pathname === "/accounts/tags";
+  if (!isPage && !isApi && !isLogin && !isLogout && !isDelete && !isTags) {
     return json({ success: false, error: "接口不存在。" }, 404);
   }
-  const allowed = isLogout ? ["POST"] : ["GET", "HEAD", "POST"];
+  const allowed = (isLogout || isTags) ? ["POST"] : ["GET", "HEAD", "POST"];
   if (!allowed.includes(request.method)) {
     return json({ success: false, error: "请求方法不支持。" }, 405, { Allow: allowed.join(", ") });
   }
@@ -290,24 +343,26 @@ async function handleRequest(request, env) {
     // 自动上报只验证 API_KEY，不依赖网页登录状态或登录环境变量。
     if (request.method === "POST" && (isPage || isApi)) return await receiveReport(request, env);
     if (!loginConfigured(env)) {
-      if (isPage || isDelete) return html(renderLoginPage({ configured: false }), 503);
+      if (isPage || isDelete || isTags) return html(renderLoginPage({ configured: false }), 503);
       throw new HttpError(503, "请管理员配置 LOGIN_USERNAME 和 LOGIN_PASSWORD。");
     }
     if (!(await isAuthenticated(request, env))) {
       if (isApi) throw new HttpError(401, "请先登录后再查看报告。");
-      const returnTo = safeReturnTo(isDelete ? url.searchParams.get("next") : url.pathname + url.search);
+      const returnTo = safeReturnTo((isDelete || isTags) ? url.searchParams.get("next") : url.pathname + url.search);
       return redirect(
         returnTo === "/" ? "/login" : `/login?next=${encodeURIComponent(returnTo)}`,
         request.method === "POST" ? 303 : 302,
       );
     }
     if (isDelete) return await handleAccountDelete(request, env, url);
-    const accounts = await listReports(env);
+    if (isTags) return await handleAccountTags(request, env, url);
+    const accounts = await listReports(env, { includeTags: !isApi });
     if (isApi) return json({ success: true, data: accounts });
     const query = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
     return html(renderPage(accounts, query, {
       deleted: url.searchParams.get("deleted") === "1",
       manage: url.searchParams.get("manage") === "1",
+      tagsSaved: url.searchParams.get("tags_saved") === "1",
     }), 200, { copyEmail: true });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
@@ -321,6 +376,7 @@ async function handleRequest(request, env) {
     if (isDelete) {
       return html(renderDeletePage({ error: message, returnTo: safeReturnTo(url.searchParams.get("next")) }), status);
     }
+    if (isTags) return html(renderTagErrorPage(message), status);
     if (isPage && ["GET", "HEAD"].includes(request.method)) {
       return html(renderUnavailablePage(), status);
     }

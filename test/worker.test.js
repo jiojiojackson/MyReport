@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.js";
@@ -16,8 +16,8 @@ let mf;
 let db;
 let sessionCookie;
 
-before(async () => {
-  mf = new Miniflare(convertV4MiniflareOptions({
+function createRuntime() {
+  return new Miniflare(convertV4MiniflareOptions({
     modules: ["index.js", "page.js", "auth.js", "report-status.js"].map((filename) => ({
       type: "ESModule",
       path: fileURLToPath(new URL(`../src/${filename}`, import.meta.url)),
@@ -27,9 +27,19 @@ before(async () => {
     bindings: { API_KEY, ...LOGIN_ENV },
     log: new Log(LogLevel.ERROR),
   }));
+}
+
+async function migrate(database, filename) {
+  const migration = await readFile(new URL(`../migrations/${filename}`, import.meta.url), "utf8");
+  await database.batch(migration.split(";").map((sql) => sql.trim()).filter(Boolean).map((sql) => database.prepare(sql)));
+}
+
+before(async () => {
+  mf = createRuntime();
   db = await mf.getD1Database("DB");
-  const migration = await readFile(new URL("../migrations/0001_create_reports.sql", import.meta.url), "utf8");
-  await db.batch(migration.split(";").map((sql) => sql.trim()).filter(Boolean).map((sql) => db.prepare(sql)));
+  for (const filename of (await readdir(new URL("../migrations/", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
+    await migrate(db, filename);
+  }
   const response = await login();
   assert.equal(response.status, 303);
   sessionCookie = response.headers.get("set-cookie").split(";")[0];
@@ -88,6 +98,18 @@ async function data() {
 async function assertNoWrites() {
   assert.equal((await db.prepare("SELECT count(*) AS total FROM accounts").first()).total, 0);
   assert.equal((await db.prepare("SELECT count(*) AS total FROM reports").first()).total, 0);
+}
+
+function saveTags(values = {}, headers = {}) {
+  return read("/accounts/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, ...headers },
+    body: new URLSearchParams({ email: example.email, tags: "主账号，常用", next: "/?manage=1", ...values }).toString(),
+  });
+}
+
+async function storedTags(email = example.email) {
+  return (await db.prepare("SELECT tag FROM account_tags WHERE account_email = ? ORDER BY position").bind(email).all()).results.map((row) => row.tag);
 }
 
 test("valid header-authenticated report is persisted in D1 and returned", async () => {
@@ -778,4 +800,201 @@ test("a later upload recreates the deleted email with a fresh history", async ()
   await post({ ...example, total_points: 9999 });
   const [account] = await data();
   assert.deepEqual(account.reports, [{ total_points: 9999, report_time: example.report_time }]);
+});
+
+test("account tags are normalized, persisted and shown outside management without changing the reports API", async () => {
+  await post();
+  await post({ ...example, email: "bob@example.com" });
+  const before = await data();
+  const response = await saveTags({ email: " ALICE@Example.COM ", tags: " 主账号，常用,主账号；VIP;; " });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/?manage=1&tags_saved=1");
+  assert.deepEqual(await storedTags(), ["主账号", "常用", "VIP"]);
+  assert.deepEqual(await storedTags("bob@example.com"), []);
+  assert.deepEqual(await data(), before);
+  const normal = await (await read()).text();
+  assert.equal((normal.match(/class="account-tag"/g) ?? []).length, 6);
+  assert.ok(!normal.includes('class="tag-editor"'));
+  const manage = await (await read("/?manage=1")).text();
+  assert.ok(manage.includes("编辑标签"));
+  assert.ok(manage.includes('value="主账号，常用，VIP"'));
+  assert.equal((manage.match(/class="tag-form"/g) ?? []).length, 4);
+  assert.equal((manage.match(/scope="col"/g) ?? []).length, 11);
+});
+
+test("tags can be replaced and cleared independently for each account", async () => {
+  await post();
+  await post({ ...example, email: "bob@example.com" });
+  await saveTags({ tags: "A,B" });
+  await saveTags({ email: "bob@example.com", tags: "B" });
+  assert.equal((await saveTags({ tags: "B,C" })).status, 303);
+  assert.deepEqual(await storedTags(), ["B", "C"]);
+  assert.equal((await saveTags({ tags: " ,， ;； " })).status, 303);
+  assert.deepEqual(await storedTags(), []);
+  assert.deepEqual(await storedTags("bob@example.com"), ["B"]);
+});
+
+test("new reports and five-report retention keep tags; deleting and recreating the account clears them", async () => {
+  await post();
+  await saveTags({ tags: "长期,主号" });
+  for (let i = 0; i < 7; i++) {
+    await post({ ...example, total_points: i, tags: ["ignored-api-input"] });
+  }
+  assert.equal((await data())[0].reports.length, 5);
+  assert.deepEqual(await storedTags(), ["长期", "主号"]);
+  assert.equal((await deleteAccount()).status, 303);
+  assert.deepEqual(await storedTags(), []);
+  assert.equal((await saveTags()).status, 404);
+  await assertNoWrites();
+  await post();
+  assert.deepEqual(await storedTags(), []);
+});
+
+test("tag limits preserve the entered values for correction and leave the database unchanged", async () => {
+  await post();
+  await saveTags({ tags: "原标签" });
+  const before = await data();
+  for (const tags of ["1,2,3,4,5,6", "字".repeat(21), "😀".repeat(21), "tab\tinside", "null\u0000inside"]) {
+    const response = await saveTags({ tags, next: "/?q=alice&manage=1" });
+    assert.equal(response.status, 400, tags);
+    const html = await response.text();
+    assert.ok(html.includes('class="tag-editor" open'));
+    assert.ok(html.includes('aria-invalid="true"'));
+    assert.ok(html.includes('value="alice"'));
+    assert.deepEqual(await storedTags(), ["原标签"]);
+  }
+  assert.deepEqual(await data(), before);
+});
+
+test("five twenty-character Unicode tags are accepted and duplicates do not count twice", async () => {
+  await post();
+  const tags = ["字".repeat(20), "😀".repeat(20), "A", "B", "C"];
+  assert.equal((await saveTags({ tags: [...tags, tags[0]].join("，") })).status, 303);
+  assert.deepEqual(await storedTags(), tags);
+});
+
+test("tag writes require a current webpage session and configured login even with an API key", async () => {
+  await post();
+  await saveTags({ tags: "保留" });
+  const expired = (await createSessionCookie(new Request(ORIGIN), LOGIN_ENV, Date.now() - 13 * 3600 * 1000)).split(";")[0];
+  for (const cookie of ["", "__Host-myreport_session=invalid", expired]) {
+    const response = await visit("/accounts/tags", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, "api-key": API_KEY, Cookie: cookie },
+      body: new URLSearchParams({ email: example.email, tags: "不应保存" }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/login");
+  }
+  const missingLogin = await worker.fetch(new Request(ORIGIN + "/accounts/tags", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN, Cookie: sessionCookie },
+    body: new URLSearchParams({ email: example.email, tags: "不应保存" }),
+  }), { DB: db, API_KEY });
+  assert.equal(missingLogin.status, 503);
+  assert.deepEqual(await storedTags(), ["保留"]);
+});
+
+test("tag writes reject missing and cross-site origins, wrong encoding and unsupported methods", async () => {
+  await post();
+  await saveTags({ tags: "保留" });
+  for (const origin of [undefined, "null", "https://evil.example"]) {
+    const response = await read("/accounts/tags", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", ...(origin === undefined ? {} : { Origin: origin }) },
+      body: new URLSearchParams({ email: example.email, tags: "不应保存" }),
+    });
+    assert.equal(response.status, 403);
+  }
+  assert.equal((await saveTags({}, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await saveTags({}, { "Content-Type": "application/json" })).status, 415);
+  for (const method of ["GET", "HEAD", "PUT", "DELETE"]) {
+    const response = await read("/accounts/tags", { method });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  }
+  assert.deepEqual(await storedTags(), ["保留"]);
+});
+
+test("tag writes reject ambiguous fields, invalid or missing accounts and oversized bodies", async () => {
+  await post();
+  await saveTags({ tags: "保留" });
+  const cases = [
+    ["email=alice%40example.com", 400], ["tags=x", 400],
+    ["email=alice%40example.com&tags=x&tags=y", 400],
+    ["email=alice%40example.com&email=bob%40example.com&tags=x", 400],
+    ["email=invalid&tags=x", 400], ["email=missing%40example.com&tags=x", 404],
+    ["email=missing%40example.com&tags=", 404],
+    ["email=alice%40example.com&tags=" + "a".repeat(17000), 413],
+  ];
+  for (const [body, status] of cases) {
+    const response = await read("/accounts/tags", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: ORIGIN }, body });
+    assert.equal(response.status, status);
+  }
+  assert.deepEqual(await storedTags(), ["保留"]);
+  assert.equal((await data()).length, 1);
+});
+
+test("tag text and quoted account emails are escaped and SQL-bound", async () => {
+  const email = "o'hara@example.com";
+  const tags = ["<script>x()</script>", "o'hara", "A&B"];
+  await post({ ...example, email });
+  assert.equal((await saveTags({ email, tags: tags.join(",") })).status, 303);
+  assert.deepEqual(await storedTags(email), tags);
+  const html = await (await read("/?manage=1")).text();
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("&lt;script&gt;x()&lt;/script&gt;"));
+  assert.ok(html.includes("o&#39;hara"));
+  assert.ok(html.includes("A&amp;B"));
+  assert.equal((await data())[0].reports.length, 1);
+});
+
+test("tag replacement failures roll back removed tags and hide database details", async () => {
+  await post();
+  await saveTags({ tags: "原有,保留" });
+  const before = await data();
+  await db.prepare(`CREATE TRIGGER test_fail_tag_insert BEFORE INSERT ON account_tags
+    WHEN NEW.tag = '失败' BEGIN SELECT RAISE(ABORT, 'forced tag failure'); END`).run();
+  try {
+    const response = await saveTags({ tags: "新的,失败" });
+    assert.equal(response.status, 500);
+    const html = await response.text();
+    assert.ok(html.includes("标签未能保存"));
+    assert.ok(!html.includes("forced tag failure"));
+    assert.deepEqual(await storedTags(), ["原有", "保留"]);
+    assert.deepEqual(await data(), before);
+  } finally {
+    await db.prepare("DROP TRIGGER test_fail_tag_insert").run();
+  }
+});
+
+test("tag redirects retain search and management mode and never leave this origin", async () => {
+  await post();
+  const response = await saveTags({ next: "/?q=alice&manage=1" });
+  assert.equal(response.headers.get("location"), "/?q=alice&manage=1&tags_saved=1");
+  const html = await (await read(response.headers.get("location"))).text();
+  assert.ok(html.includes("账号标签已保存。"));
+  assert.ok(html.includes('value="alice"'));
+  assert.ok(html.includes('aria-pressed="true"'));
+  for (const next of ["https://evil.example/", "//evil.example", "/accounts/delete"]) {
+    assert.equal((await saveTags({ next })).headers.get("location"), "/?manage=1&tags_saved=1");
+  }
+});
+
+test("the tag migration upgrades a populated legacy database without changing account or report data", async () => {
+  const legacyRuntime = createRuntime();
+  try {
+    const legacyDb = await legacyRuntime.getD1Database("DB");
+    await migrate(legacyDb, "0001_create_reports.sql");
+    await legacyDb.batch([
+      legacyDb.prepare("INSERT INTO accounts (email) VALUES (?)").bind(example.email),
+      legacyDb.prepare("INSERT INTO reports (account_email, total_points, report_time) VALUES (?, ?, ?)")
+        .bind(example.email, example.total_points, example.report_time),
+    ]);
+    const before = (await legacyDb.prepare("SELECT * FROM reports").all()).results;
+    await migrate(legacyDb, "0002_create_account_tags.sql");
+    assert.deepEqual((await legacyDb.prepare("SELECT * FROM reports").all()).results, before);
+    assert.deepEqual((await legacyDb.prepare("SELECT * FROM accounts").all()).results, [{ email: example.email }]);
+    await legacyDb.prepare("INSERT INTO account_tags (account_email, position, tag) VALUES (?, 0, ?)").bind(example.email, "旧账号").run();
+    assert.equal((await legacyDb.prepare("SELECT tag FROM account_tags").first()).tag, "旧账号");
+  } finally {
+    await legacyRuntime.dispose();
+  }
 });

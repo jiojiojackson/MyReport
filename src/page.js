@@ -99,12 +99,27 @@ const STYLES = `
   .copy-feedback[data-visible="true"] { opacity:1; }
   .copy-feedback[data-error="true"] { border-color:#a56c61; background:#864f46; }
   .account-details { display:grid; gap:6px; min-width:0; }
+  .account-meta { max-width:260px; }
+  .account-tag { display:inline-flex; min-width:0; max-width:100%; padding:2px 7px; border:1px solid #d8e1e7; border-radius:5px; background:#edf2f5; color:#526878; font-size:10px; font-weight:500; line-height:1.5; white-space:normal; overflow-wrap:anywhere; }
+  .account-actions { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; min-width:0; }
+  .tag-editor { min-width:0; }
+  .tag-editor[open] { flex-basis:100%; }
+  .tag-editor > summary { display:inline-flex; align-items:center; gap:5px; min-height:30px; padding:5px 8px; border:1px solid #d5e0da; border-radius:5px; background:#ffffffb0; color:var(--accent); font-size:11px; line-height:1.6; cursor:pointer; list-style:none; }
+  .tag-editor > summary::-webkit-details-marker { display:none; }
+  .tag-editor > summary:focus-visible { outline:3px solid #70a994; outline-offset:3px; }
+  .tag-editor[open] > summary { background:#e8f0eb; border-color:#b7cabb; }
+  .tag-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; margin-top:8px; width:100%; max-width:320px; }
+  .tag-form input { width:100%; min-width:0; padding:8px 9px; border:1px solid #d5e0da; border-radius:6px; background:#fff; font-size:12px; }
+  .tag-form button { padding:8px 10px; white-space:nowrap; }
+  .tag-form .tag-error { grid-column:1 / -1; margin:0; color:#9a4f43; font-size:11px; line-height:1.7; white-space:normal; }
+  .management-note { margin:0 0 20px; padding:12px 16px; border:1px solid #dbe6df; border-radius:8px; background:#edf3ef; color:#587161; font-size:12px; line-height:1.8; }
   .delete-link { display:inline-flex; align-items:center; justify-self:start; min-height:30px; padding:5px 8px; border:1px solid #eddad6; border-radius:5px; background:#fff7f5; font-size:11px; color:#a15c50; }
   .delete-link:hover { color:#843d33; text-decoration:underline; }
   .mobile-reports, .mobile-hint { display:none; }
   .account-card { min-width:0; padding:17px; border:1px solid var(--status-border); border-left:3px solid var(--status-dot); border-radius:10px; background:var(--status-bg); box-shadow:0 2px 6px #253b3303; }
   .card-account { display:flex; align-items:center; gap:10px; min-width:0; }
   .card-heading { min-width:0; display:grid; gap:5px; }
+  .card-heading .account-meta { max-width:none; }
   .card-account .avatar { align-self:flex-start; margin-top:2px; width:34px; height:34px; border-radius:9px; }
   .card-email { min-width:0; margin:0; font-size:13px; font-weight:600; line-height:1.6; overflow-wrap:anywhere; }
   .card-email .email-copy { min-height:32px; align-items:baseline; }
@@ -132,6 +147,7 @@ const STYLES = `
   .card-note { margin:0; padding-top:12px; border-top:1px solid var(--status-border); font-size:11px; color:var(--muted); }
   .card-actions { padding-top:12px; border-top:1px solid var(--status-border); }
   .card-actions .delete-link { min-height:40px; padding:8px 12px; }
+  .card-actions .tag-editor > summary { min-height:40px; padding:8px 12px; }
   .notice { margin:0 0 24px; padding:13px 16px; border:1px solid #d5e5da; border-radius:7px; background:#edf5ef; color:var(--accent); line-height:1.8; }
   .empty { text-align:center; padding:75px 20px 82px; color:var(--muted); white-space:normal; }
   .empty .empty-icon { font-size:25px; color:#a2b5a8; margin-bottom:14px; }
@@ -189,6 +205,9 @@ const STYLES = `
     input { width:100%; min-width:0; }
     .search input { font-size:16px; }
     .toolbar button { min-height:40px; }
+    .tag-form { max-width:none; }
+    .tag-form input { font-size:16px; }
+    .tag-form button { min-height:40px; }
     .desktop-reports, .desktop-hint { display:none; }
     .mobile-reports { display:grid; gap:12px; padding:10px; background:var(--paper); border-top:1px solid var(--line); }
     .mobile-hint { display:inline; }
@@ -287,13 +306,36 @@ function statusBadge(status) {
   return `<span class="status-badge" title="${escapeHtml(status.description)}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(status.label)}</span>`;
 }
 
-function mobileAccount(account, status, returnTo, manage) {
+function tagBadges(tags = []) {
+  return tags.map((tag) => `<span class="account-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("");
+}
+
+function accountActions(account, returnTo, variant, error) {
+  const activeError = error?.email === account.email ? error : null;
+  const tags = account.tags ?? [];
+  const value = activeError ? activeError.value : tags.join("，");
+  return `<div class="account-actions${variant === "mobile" ? " card-actions" : ""}">
+    <details class="tag-editor"${activeError ? " open" : ""}>
+      <summary>${tags.length ? "编辑标签" : "添加标签"}</summary>
+      <form class="tag-form" action="/accounts/tags" method="post">
+        <input type="hidden" name="email" value="${escapeHtml(account.email)}">
+        <input type="hidden" name="next" value="${escapeHtml(returnTo)}">
+        <input name="tags" type="text" maxlength="256" autocomplete="off" placeholder="例如：主账号，备用" value="${escapeHtml(value)}" aria-label="${escapeHtml(account.email)} 的标签" aria-describedby="tag-help"${activeError ? ` aria-invalid="true" aria-errormessage="tag-error-${variant}"` : ""}>
+        <button type="submit">保存标签</button>
+        ${activeError ? `<p class="tag-error" id="tag-error-${variant}" role="alert">${escapeHtml(activeError.message)}</p>` : ""}
+      </form>
+    </details>
+    ${deleteLink(account.email, returnTo)}
+  </div>`;
+}
+
+function mobileAccount(account, status, returnTo, manage, tagError) {
   const [latest, ...history] = account.reports;
   const increase = pointsIncrease(account.reports);
   const pointsLength = String(latest.total_points).length;
   const widePoints = pointsLength > 10 || (increase !== null && pointsLength + increase.length > 5);
   return `<article class="account-card status-${status.tone}" role="listitem">
-    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${emailCopyButton(account.email)}</h3>${statusBadge(status)}</div></header>
+    <header class="card-account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="card-heading"><h3 class="card-email">${emailCopyButton(account.email)}</h3><div class="account-meta">${statusBadge(status)}${tagBadges(account.tags)}</div></div></header>
     <dl class="card-latest${widePoints ? " card-latest-wide" : ""}" aria-label="最近报告">
       <div><dt>最近总积分</dt><dd class="card-points">${latestPoints(account.reports)}</dd></div>
       <div><dt>最近报告时间</dt><dd class="card-time">${reportTime(latest.report_time)}</dd></div>
@@ -304,11 +346,11 @@ function mobileAccount(account, status, returnTo, manage) {
         <div><dt>历史报告时间${index + 2}</dt><dd>${reportTime(report.report_time)}</dd></div>
       </dl>`).join("")}
     </details>` : '<p class="card-note">暂无历史记录</p>'}
-    ${manage ? `<div class="card-actions">${deleteLink(account.email, returnTo)}</div>` : ""}
+    ${manage ? accountActions(account, returnTo, "mobile", tagError) : ""}
   </article>`;
 }
 
-export function renderPage(accounts, query = "", { deleted = false, manage = false, now = Date.now() } = {}) {
+export function renderPage(accounts, query = "", { deleted = false, manage = false, tagsSaved = false, tagError = null, now = Date.now() } = {}) {
   const filtered = accounts.filter((account) => account.email.includes(query.toLowerCase()));
   const statuses = new Map(accounts.map((account) => [account.email, reportStatus(account.reports, now)]));
   const statusCounts = { green: 0, yellow: 0, red: 0 };
@@ -322,7 +364,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
     `历史总积分${i + 2}`, `历史报告时间${i + 2}`,
   ]).flat()];
   const rows = filtered.map((account) => `<tr class="report-row status-${statuses.get(account.email).tone}">
-    <th scope="row"><span class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><span class="account-details">${emailCopyButton(account.email)}<span class="account-meta">${statusBadge(statuses.get(account.email))}${manage ? deleteLink(account.email, refreshUrl) : ""}</span></span></span></th>
+    <th scope="row"><div class="account"><span class="avatar" aria-hidden="true">${escapeHtml(account.email.slice(0, 2).toUpperCase())}</span><div class="account-details">${emailCopyButton(account.email)}<div class="account-meta">${statusBadge(statuses.get(account.email))}${tagBadges(account.tags)}</div>${manage ? accountActions(account, refreshUrl, "desktop", tagError) : ""}</div></div></th>
     ${reportCells(account.reports)}
   </tr>`).join("");
   const emptyContent = `<div class="empty-icon" aria-hidden="true">▤</div><h3>${query ? "没有找到匹配的账号" : "等待第一份报告"}</h3><p>${query ? "试试其他邮箱关键词，或清除搜索查看全部账号。" : "收到上报后，账号积分与历史记录会显示在这里。"}</p>`;
@@ -340,6 +382,8 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
       </div>
     </div>
     ${deleted ? '<p class="notice" role="status">账号及全部报告已删除。</p>' : ""}
+    ${tagsSaved ? '<p class="notice" role="status">账号标签已保存。</p>' : ""}
+    ${manage ? '<p class="management-note" id="tag-help">点击“添加标签”或“编辑标签”后保存。标签用逗号分隔，最多5个、每个20字；留空保存可清除标签。</p>' : ""}
     <dl class="stats" aria-label="报告概览">
       <div class="stat"><dt>已收录账号</dt><dd>${accounts.length}<small>个</small></dd></div>
       <div class="stat"><dt>已保留报告</dt><dd>${retained}<small>份</small></dd></div>
@@ -370,7 +414,7 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
           <tbody>${rows || empty}</tbody>
         </table>
       </div>
-      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, statuses.get(account.email), refreshUrl, manage)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
+      <div class="mobile-reports"${filtered.length ? ' role="list"' : ""} aria-label="账户报告卡片">${filtered.map((account) => mobileAccount(account, statuses.get(account.email), refreshUrl, manage, tagError)).join("") || `<div class="empty">${emptyContent}</div>`}</div>
       <div class="table-footer"><span>${query ? `匹配 ${filtered.length} / ${accounts.length} 个账号` : `共 ${accounts.length} 个账号`} · 按最近报告时间降序</span><span class="desktop-hint">每个邮箱保留最近收到的 5 份报告 · 左右滑动查看历史</span><span class="mobile-hint">每个账号保留最近 5 份报告 · 历史记录可展开查看</span></div>
     </section>
     <footer><span>MyReport · 账户积分记录</span><span>报告时间按日本时间解读 · 刷新页面更新数据与状态</span></footer>
@@ -379,6 +423,10 @@ export function renderPage(accounts, query = "", { deleted = false, manage = fal
 
 export function renderUnavailablePage() {
   return shell(`<section class="report unavailable"><p class="eyebrow">MYREPORT</p><h1>报告暂时无法加载</h1><p>请稍后重试。管理员可检查 D1 数据库绑定与数据库迁移是否已完成。</p><a class="refresh" href="/">${refreshIcon}重新加载</a></section>`);
+}
+
+export function renderTagErrorPage(error) {
+  return shell(`<section class="login-card confirmation-card"><p class="eyebrow">ACCOUNT MANAGEMENT</p><h1>标签未能保存</h1><p class="login-error" role="alert">${escapeHtml(error)}</p><div class="confirmation-actions"><a class="refresh" href="/?manage=1">返回账号管理</a></div></section>`, { authenticated: true, title: "标签保存失败 · MyReport" });
 }
 
 export function renderDeletePage({ email = "", reportCount = 0, returnTo = "/", error = "" } = {}) {
